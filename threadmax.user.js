@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ThreadMax
 // @namespace    https://github.com/Stxyu-p/threadmax
-// @version      1.0.0
+// @version      1.0.1
 // @description  Precision Media Downloader, Video Booster, Clean Link & Smart Timestamps for Threads Web
 // @author       P Choke & MIKA
 // @match        https://www.threads.com/*
@@ -18,13 +18,13 @@
 // ==/UserScript==
 
 /**
- * ThreadMax v1.0.0 — Pure Vanilla JavaScript, Zero External Dependencies
+ * ThreadMax v1.0.1 — Pure Vanilla JavaScript, Zero External Dependencies
  * Architecture: Clean Modular / Anti-Slop Minimal Precision
  *
  * ponytail: deliberate simplifications:
- * - Single-file architecture without bundlers: straightforward debugging in Tampermonkey editor.
+ * - Direct SVG path matching (M7.247 1.499) for Share button: 100% language-independent.
  * - Stored ZIP (compression level 0): instant client-side packing without memory-heavy deflate.
- * - Polling MutationObserver with 250ms debounce: avoids layout thrashing on infinite scroll.
+ * - 250ms debounced scanning: smooth 60fps scrolling without DOM lockups.
  */
 
 (function () {
@@ -252,48 +252,88 @@
       }
       return `${u.origin}${u.pathname}`;
     } catch (e) {
-      return url.split('?')[0];
+      return (url || '').split('?')[0];
     }
   }
 
   /* ─── 4. DOM EXTRACTION (POST, MEDIA, ACTIONS) ────────────── */
   const TM_DOM = {
-    findPosts: () => {
-      const candidates = Array.from(document.querySelectorAll('div[data-pressable-container="true"], article'));
-      return candidates.filter(card => {
-        if (card.offsetHeight < 60) return false;
-        // Avoid nested pressable containers
-        let p = card.parentElement;
-        while (p && p !== document.body) {
-          if (p.getAttribute?.('data-pressable-container') === 'true') return false;
-          p = p.parentElement;
+    // Finds all share buttons across the page (independent of language or DOM nesting)
+    findShareButtons: () => {
+      const results = [];
+      // 1. Language-independent SVG path matching for Threads Share Paper-Plane
+      const sharePaths = Array.from(document.querySelectorAll('path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]'));
+      
+      sharePaths.forEach(sp => {
+        const svg = sp.closest('svg');
+        if (!svg) return;
+        const btn = svg.closest('[role="button"]') || svg.parentElement;
+        const wrapper = btn ? btn.parentElement : null;
+        const actionRow = wrapper ? wrapper.parentElement : null;
+        if (btn && wrapper && actionRow && !results.some(r => r.shareBtn === btn)) {
+          results.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
         }
-        return true;
       });
+
+      // 2. Fallback: title/aria-label matching if path ever shifts
+      if (results.length === 0) {
+        const titleSvgs = Array.from(document.querySelectorAll('svg[title*="Share" i], svg[title*="แชร์"], svg[title*="分享"], svg[aria-label*="Share" i], svg[aria-label*="แชร์"]'));
+        titleSvgs.forEach(svg => {
+          const btn = svg.closest('[role="button"]') || svg.parentElement;
+          const wrapper = btn ? btn.parentElement : null;
+          const actionRow = wrapper ? wrapper.parentElement : null;
+          if (btn && wrapper && actionRow && !results.some(r => r.shareBtn === btn)) {
+            results.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
+          }
+        });
+      }
+
+      return results;
+    },
+
+    findPostCard: (startNode) => {
+      let curr = startNode;
+      while (curr && curr !== document.body) {
+        if (curr.getAttribute?.('data-pressable-container') === 'true' || curr.tagName === 'ARTICLE') {
+          return curr;
+        }
+        curr = curr.parentElement;
+      }
+      // Fallback: search upward for container that has a post link
+      curr = startNode;
+      while (curr && curr !== document.body) {
+        if (curr.querySelector?.('a[href*="/post/"]')) {
+          return curr;
+        }
+        curr = curr.parentElement;
+      }
+      return startNode.parentElement?.parentElement || startNode;
     },
 
     getPostMetadata: (card) => {
-      // 1. Author
-      const authorEl = card.querySelector('a[href*="/@"]');
+      // 1. Post Link, Author & Post ID
+      const postLinkEl = card.querySelector('a[href*="/post/"]');
       let author = 'threads_user';
-      if (authorEl) {
-        const href = authorEl.getAttribute('href') || '';
-        const match = href.match(/@([^/?#]+)/);
-        if (match) author = match[1];
-        else author = authorEl.innerText.trim().replace(/^@/, '').split('\n')[0] || author;
-      }
-
-      // 2. Post ID & Clean URL
-      const linkEl = card.querySelector('a[href*="/post/"]');
       let postId = Date.now().toString(36);
       let postUrl = window.location.href;
-      if (linkEl && linkEl.href) {
-        postUrl = cleanPostUrl(linkEl.href);
-        const match = postUrl.match(/\/post\/([^/?#]+)/);
-        if (match) postId = match[1];
+
+      if (postLinkEl && postLinkEl.href) {
+        postUrl = cleanPostUrl(postLinkEl.href);
+        const match = postUrl.match(/@([^/?#]+)\/post\/([^/?#]+)/);
+        if (match) {
+          author = match[1];
+          postId = match[2];
+        }
+      } else {
+        const authorEl = card.querySelector('a[href*="/@"]');
+        if (authorEl) {
+          const href = authorEl.getAttribute('href') || '';
+          const match = href.match(/@([^/?#]+)/);
+          if (match) author = match[1];
+        }
       }
 
-      // 3. Media Items (Images & Videos)
+      // 2. Media Extraction
       const media = [];
       const seenUrls = new Set();
 
@@ -306,7 +346,7 @@
         }
       });
 
-      // Images (Exclude profile pictures & small icons)
+      // Images (Exclude profile avatars: size check, -19/ cdn pattern, avatar links)
       card.querySelectorAll('img').forEach(img => {
         const src = img.src;
         if (!src || seenUrls.has(src)) return;
@@ -318,57 +358,50 @@
           if (href.includes('/@') && !href.includes('/post/')) return;
         }
 
-        // Check size & circular styling (avatars are round)
+        // Avatar check
+        if (src.includes('-19/')) return;
         const rect = img.getBoundingClientRect();
         if (rect.width > 0 && rect.width < 75) return;
         const style = window.getComputedStyle(img);
         if (style.borderRadius.includes('50%')) return;
 
-        // Verify CDN origin
+        // Check CDN origin
         if (src.includes('cdninstagram.com') || src.includes('fbcdn.net')) {
           seenUrls.add(src);
           media.push({ type: 'image', url: src, element: img });
         }
       });
 
-      // 4. Action Row (Like, Comment, Repost, Share)
-      const shareSvg = card.querySelector('svg[aria-label*="Share" i], svg[aria-label*="แชร์"], svg[aria-label*="分享"], svg[aria-label*="Bagikan" i]');
-      let actionRow = null;
-      let shareButton = null;
-
-      if (shareSvg) {
-        shareButton = shareSvg.closest('button') || shareSvg.closest('div[role="button"]');
-        if (shareButton) {
-          actionRow = shareButton.parentElement;
-        }
-      }
-
       return {
         card,
         author,
         postId,
         postUrl,
-        media,
-        actionRow,
-        shareButton
+        media
       };
     }
   };
 
   /* ─── 5. IN-FEED BUTTON & DROPDOWN ────────────────────────── */
   const TM_Buttons = {
-    inject: (postData) => {
-      const { card, author, postId, postUrl, media, shareButton, actionRow } = postData;
-      if (!shareButton || !actionRow) return;
-      if (actionRow.querySelector('.tm-download-btn')) return;
+    injectIntoActionRow: (shareInfo) => {
+      const { shareBtn, shareWrapper, actionRow } = shareInfo;
+      if (actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')) return;
 
-      // 1. Download Button (Only for posts with media)
+      const card = TM_DOM.findPostCard(actionRow);
+      const postData = TM_DOM.getPostMetadata(card);
+      const { author, postId, postUrl, media } = postData;
+
+      // 1. Download Button (when media exists)
       if (media.length > 0) {
+        const dlWrapper = document.createElement('div');
+        dlWrapper.className = shareWrapper.className || 'tm-wrapper';
+
         const dlBtn = document.createElement('div');
         dlBtn.className = 'tm-download-btn tm-btn';
         dlBtn.setAttribute('role', 'button');
         dlBtn.setAttribute('tabindex', '0');
-        dlBtn.setAttribute('title', media.length > 1 ? `ThreadMax: ดาวน์โหลดสื่อ (${media.length} รายการ)` : 'ThreadMax: ดาวน์โหลดสื่อ');
+        dlBtn.setAttribute('title', media.length > 1 ? `ThreadMax: ดาวน์โหลดสื่อ (${media.length} ไฟล์)` : 'ThreadMax: ดาวน์โหลดสื่อ');
         dlBtn.innerHTML = `
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -382,45 +415,45 @@
           e.stopPropagation();
 
           if (media.length === 1) {
-            // Single media post -> Instant download
             TM_Downloader.downloadSingle(media[0], author, postId, 1, dlBtn);
           } else {
-            // Carousel -> Dropdown menu
             TM_Buttons.showCarouselDropdown(dlBtn, postData);
           }
         });
 
-        shareButton.parentNode.insertBefore(dlBtn, shareButton.nextSibling);
+        dlWrapper.appendChild(dlBtn);
+        actionRow.insertBefore(dlWrapper, shareWrapper.nextSibling);
       }
 
       // 2. Clean Link Button
-      if (!actionRow.querySelector('.tm-cleanlink-btn')) {
-        const linkBtn = document.createElement('div');
-        linkBtn.className = 'tm-cleanlink-btn tm-btn';
-        linkBtn.setAttribute('role', 'button');
-        linkBtn.setAttribute('tabindex', '0');
-        linkBtn.setAttribute('title', 'ThreadMax: คัดลอกลิงก์สะอาด (ไร้ Tracking Code)');
-        linkBtn.innerHTML = `
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-          </svg>
-        `;
+      const linkWrapper = document.createElement('div');
+      linkWrapper.className = shareWrapper.className || 'tm-wrapper';
 
-        linkBtn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const clean = cleanPostUrl(postUrl);
-          navigator.clipboard.writeText(clean).then(() => {
-            showToast('✓ คัดลอกลิงก์สะอาดแล้ว');
-          }).catch(() => {
-            showToast('⚠️ ไม่สามารถเข้าถึง Clipboard ได้');
-          });
+      const linkBtn = document.createElement('div');
+      linkBtn.className = 'tm-cleanlink-btn tm-btn';
+      linkBtn.setAttribute('role', 'button');
+      linkBtn.setAttribute('tabindex', '0');
+      linkBtn.setAttribute('title', 'ThreadMax: คัดลอกลิงก์สะอาด (ไร้ Tracking Code)');
+      linkBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+      `;
+
+      linkBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const clean = cleanPostUrl(postUrl);
+        navigator.clipboard.writeText(clean).then(() => {
+          showToast('✓ คัดลอกลิงก์สะอาดแล้ว');
+        }).catch(() => {
+          showToast('⚠️ ไม่สามารถเข้าถึง Clipboard ได้');
         });
+      });
 
-        const targetAnchor = actionRow.querySelector('.tm-download-btn') || shareButton;
-        targetAnchor.parentNode.insertBefore(linkBtn, targetAnchor.nextSibling);
-      }
+      linkWrapper.appendChild(linkBtn);
+      actionRow.appendChild(linkWrapper);
     },
 
     showCarouselDropdown: (anchorBtn, postData) => {
@@ -430,28 +463,28 @@
       const dropdown = document.createElement('div');
       dropdown.className = 'tm-dropdown';
 
-      dropdown.innerHTML = `
-        <div class="tm-dropdown-item" data-action="all">
-          <span class="tm-dropdown-icon">📦</span>
-          <span>ดาวน์โหลดทั้งหมด (${postData.media.length} ไฟล์ • ${mode.toUpperCase()})</span>
-        </div>
-        <div class="tm-dropdown-item" data-action="select">
-          <span class="tm-dropdown-icon">☑️</span>
-          <span>เลือกดาวน์โหลดเฉพาะไฟล์...</span>
-        </div>
-      `;
+      const allItem = document.createElement('div');
+      allItem.className = 'tm-dropdown-item';
+      allItem.innerHTML = `<span class="tm-dropdown-icon">📦</span><span>ดาวน์โหลดทั้งหมด (${postData.media.length} ไฟล์ • ${mode.toUpperCase()})</span>`;
 
-      dropdown.querySelector('[data-action="all"]').onclick = (e) => {
+      const selectItem = document.createElement('div');
+      selectItem.className = 'tm-dropdown-item';
+      selectItem.innerHTML = `<span class="tm-dropdown-icon">☑️</span><span>เลือกดาวน์โหลดเฉพาะไฟล์...</span>`;
+
+      allItem.onclick = (e) => {
         e.stopPropagation();
         dropdown.remove();
         TM_Downloader.downloadBatch(postData.media, postData.author, postData.postId, anchorBtn, mode);
       };
 
-      dropdown.querySelector('[data-action="select"]').onclick = (e) => {
+      selectItem.onclick = (e) => {
         e.stopPropagation();
         dropdown.remove();
         TM_Selector.activate(postData, anchorBtn);
       };
+
+      dropdown.appendChild(allItem);
+      dropdown.appendChild(selectItem);
 
       // Close on outside click
       const onDocClick = (evt) => {
@@ -483,7 +516,7 @@
             downloadBlob(blob, filename);
             TM_Downloader.clearProgress(anchorBtn);
           })
-          .catch(err => {
+          .catch(() => {
             downloadDirect(mediaItem.url, filename);
             TM_Downloader.clearProgress(anchorBtn);
           });
@@ -800,7 +833,6 @@
         cursor: pointer;
         transition: color 150ms ease, background-color 150ms ease;
         user-select: none;
-        margin-left: 2px;
       }
       .tm-btn:hover {
         color: #f3f5f7;
@@ -1015,10 +1047,9 @@
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(() => {
-      const posts = TM_DOM.findPosts();
-      posts.forEach(card => {
-        const postData = TM_DOM.getPostMetadata(card);
-        TM_Buttons.inject(postData);
+      const shareItems = TM_DOM.findShareButtons();
+      shareItems.forEach(shareInfo => {
+        TM_Buttons.injectIntoActionRow(shareInfo);
       });
       TM_Video.init();
       TM_Timestamp.updateAll();
@@ -1041,7 +1072,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    console.info('[ThreadMax] v1.0.0 initialized successfully');
+    console.info('[ThreadMax] v1.0.1 initialized successfully');
   }
 
   if (document.readyState === 'loading') {

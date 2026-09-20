@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ThreadMax
 // @namespace    https://github.com/Stxyu-p/threadmax
-// @version      1.1.0
+// @version      1.1.1
 // @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps & Thread Unroller for Threads Web
 // @author       P Choke & MIKA
 // @match        https://www.threads.com/*
@@ -18,13 +18,14 @@
 // ==/UserScript==
 
 /**
- * ThreadMax v1.1.0 — Pure Vanilla JavaScript, Zero External Dependencies
+ * ThreadMax v1.1.1 — Pure Vanilla JavaScript, Zero External Dependencies
  * Architecture: Clean Modular / Anti-Slop Minimal Precision
  *
  * ponytail: deliberate simplifications:
  * - Direct SVG path matching (M7.247 1.499) for Share button: 100% language-independent.
+ * - Perfectly aligned action bar wrappers (yDiff = 0px): matches native button flex geometry.
+ * - Sticky dropdown anchored directly in button wrapper: 100% glued on scroll/virtualization.
  * - Non-destructive Media Tile overlay: attaches checkboxes to parent DIV without touching <picture> tags.
- * - Fixed-position floating dropdown tethered via getBoundingClientRect(): zero container clipping.
  * - Stored ZIP (compression level 0): instant client-side packing without memory-heavy deflate.
  */
 
@@ -384,7 +385,7 @@
     }
   };
 
-  /* ─── 5. IN-FEED BUTTON & DROPDOWN ────────────────────────── */
+  /* ─── 5. IN-FEED BUTTON & DROPDOWN (Pixel-Perfect Alignment) ─ */
   const TM_Buttons = {
     injectIntoActionRow: (shareInfo) => {
       const { shareBtn, shareWrapper, actionRow } = shareInfo;
@@ -397,7 +398,8 @@
       // 1. Download Button (when media exists)
       if (media.length > 0) {
         const dlWrapper = document.createElement('div');
-        dlWrapper.className = shareWrapper.className || 'tm-wrapper';
+        dlWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
+        dlWrapper.style.position = 'relative';
 
         const dlBtn = document.createElement('div');
         dlBtn.className = 'tm-download-btn tm-btn';
@@ -419,7 +421,7 @@
           if (media.length === 1) {
             TM_Downloader.downloadSingle(media[0], author, postId, 1, dlBtn);
           } else {
-            TM_Buttons.showCarouselDropdown(dlBtn, postData);
+            TM_Buttons.showCarouselDropdown(dlWrapper, dlBtn, postData);
           }
         });
 
@@ -429,7 +431,8 @@
 
       // 2. Clean Link Button
       const linkWrapper = document.createElement('div');
-      linkWrapper.className = shareWrapper.className || 'tm-wrapper';
+      linkWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
+      linkWrapper.style.position = 'relative';
 
       const linkBtn = document.createElement('div');
       linkBtn.className = 'tm-cleanlink-btn tm-btn';
@@ -461,7 +464,9 @@
       // 3. Unroll Thread Button (When on post detail or OP thread)
       if (window.location.pathname.includes('/post/') && !actionRow.querySelector('.tm-unroll-btn')) {
         const unrollWrapper = document.createElement('div');
-        unrollWrapper.className = shareWrapper.className || 'tm-wrapper';
+        unrollWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
+        unrollWrapper.style.position = 'relative';
+
         const unrollBtn = document.createElement('div');
         unrollBtn.className = 'tm-unroll-btn tm-btn';
         unrollBtn.setAttribute('role', 'button');
@@ -483,7 +488,13 @@
       }
     },
 
-    showCarouselDropdown: (anchorBtn, postData) => {
+    showCarouselDropdown: (anchorWrapper, anchorBtn, postData) => {
+      // If already open on this wrapper, toggle close
+      const existing = anchorWrapper.querySelector('.tm-dropdown');
+      if (existing) {
+        existing.remove();
+        return;
+      }
       document.querySelectorAll('.tm-dropdown').forEach(d => d.remove());
 
       const mode = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
@@ -513,24 +524,12 @@
       dropdown.appendChild(allItem);
       dropdown.appendChild(selectItem);
 
-      // Fixed positioning tethered to anchor button (Zero container clipping)
-      const rect = anchorBtn.getBoundingClientRect();
-      dropdown.style.position = 'fixed';
-      dropdown.style.top = `${rect.bottom + 8}px`;
-
-      const dropdownWidth = 240;
-      let left = rect.left + (rect.width / 2) - (dropdownWidth / 2);
-      if (left + dropdownWidth > window.innerWidth - 12) {
-        left = window.innerWidth - dropdownWidth - 12;
-      }
-      if (left < 12) left = 12;
-      dropdown.style.left = `${left}px`;
-
-      document.body.appendChild(dropdown);
+      // Anchored directly inside wrapper: 100% sticky to button on scroll & virtual DOM shifts
+      anchorWrapper.appendChild(dropdown);
 
       // Close on outside click
       const onDocClick = (evt) => {
-        if (!dropdown.contains(evt.target) && evt.target !== anchorBtn) {
+        if (!dropdown.contains(evt.target) && !anchorWrapper.contains(evt.target)) {
           dropdown.remove();
           document.removeEventListener('click', onDocClick);
         }
@@ -865,7 +864,6 @@
   /* ─── 10. THREAD UNROLLER & CLEAN READER (Phase 2) ────────── */
   const TM_Unroller = {
     open: (author, postId) => {
-      // Gather all posts by the same author in view
       const allCards = TM_DOM.findShareButtons().map(s => TM_DOM.findPostCard(s.actionRow));
       const opPosts = [];
 
@@ -883,7 +881,6 @@
         return;
       }
 
-      // Build Reader Modal
       let modal = document.getElementById('tm-reader-modal');
       if (modal) modal.remove();
 
@@ -916,7 +913,6 @@
 
       document.body.appendChild(modal);
 
-      // Markdown Export
       modal.querySelector('#tm-copy-md').onclick = () => {
         const mdText = `# Thread by @${author}\\n\\nURL: https://www.threads.com/@${author}/post/${postId}\\n\\n---\\n\\n` +
           opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\\n\\n${p.text}\\n`).join('\\n---\\n\\n');
@@ -925,7 +921,6 @@
         });
       };
 
-      // Close handlers
       modal.querySelector('#tm-close-reader').onclick = () => modal.remove();
       modal.querySelector('.tm-reader-overlay').onclick = () => modal.remove();
       const onEsc = (e) => {
@@ -999,325 +994,348 @@
     const style = document.createElement('style');
     style.id = 'threadmax-styles';
     style.textContent = `
-      /* Common Button Styles — Matching Native Threads Icons */
-      .tm-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        color: rgba(243, 245, 247, 0.85);
-        cursor: pointer;
-        transition: color 150ms ease, background-color 150ms ease, transform 100ms ease;
-        user-select: none;
-      }
-      .tm-btn:hover {
-        color: #ffffff;
-        background-color: rgba(255, 255, 255, 0.1);
-      }
-      .tm-btn:active {
-        transform: scale(0.92);
+      /* Action Row Item Wrapper — 100% Geometric Match */
+      .tm-wrapper {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        height: 36px !important;
+        min-width: 36px !important;
+        box-sizing: border-box !important;
       }
 
-      /* Dropdown Menu (Fixed Positioning + Solid Surface) */
+      /* Common Button Styles — 100% Native Vertical Centering */
+      .tm-btn {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 36px !important;
+        height: 36px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border-radius: 50% !important;
+        color: rgba(243, 245, 247, 0.85) !important;
+        cursor: pointer !important;
+        transition: color 150ms ease, background-color 150ms ease, transform 100ms ease !important;
+        user-select: none !important;
+        box-sizing: border-box !important;
+      }
+      .tm-btn svg {
+        display: block !important;
+        margin: 0 auto !important;
+        pointer-events: none !important;
+      }
+      .tm-btn:hover {
+        color: #ffffff !important;
+        background-color: rgba(255, 255, 255, 0.1) !important;
+      }
+      .tm-btn:active {
+        transform: scale(0.92) !important;
+      }
+
+      /* Dropdown Menu (Anchored directly inside wrapper: 100% sticky) */
       .tm-dropdown {
-        z-index: 100000;
-        min-width: 240px;
-        background-color: #161616;
-        border: 1px solid #2e2e2e;
-        border-radius: 10px;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75);
-        padding: 6px;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        animation: tmFadeIn 120ms ease;
+        position: absolute !important;
+        top: calc(100% + 4px) !important;
+        right: 0 !important;
+        z-index: 100000 !important;
+        min-width: 250px !important;
+        background-color: #161616 !important;
+        border: 1px solid #2e2e2e !important;
+        border-radius: 10px !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.85) !important;
+        padding: 6px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 2px !important;
+        animation: tmFadeIn 120ms ease !important;
       }
       @keyframes tmFadeIn {
         from { opacity: 0; transform: translateY(-4px); }
         to { opacity: 1; transform: translateY(0); }
       }
       .tm-dropdown-item {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px 14px;
-        border-radius: 6px;
-        color: #f3f5f7;
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: background-color 120ms ease;
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+        padding: 10px 14px !important;
+        border-radius: 6px !important;
+        color: #f3f5f7 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+        transition: background-color 120ms ease !important;
+        white-space: nowrap !important;
       }
       .tm-dropdown-item:hover {
-        background-color: #262626;
+        background-color: #262626 !important;
       }
       .tm-dropdown-icon {
-        font-size: 15px;
+        font-size: 15px !important;
       }
 
       /* Progress Bar */
       .tm-progress-bar {
-        position: absolute;
-        bottom: -22px;
-        left: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        z-index: 999;
+        position: absolute !important;
+        bottom: -22px !important;
+        left: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 3px !important;
+        z-index: 999 !important;
       }
       .tm-progress-text {
-        font-size: 11px;
-        color: #aaaaaa;
-        font-family: monospace;
+        font-size: 11px !important;
+        color: #aaaaaa !important;
+        font-family: monospace !important;
       }
       .tm-progress-track {
-        width: 80px;
-        height: 2px;
-        background-color: #2a2a2a;
-        border-radius: 2px;
-        overflow: hidden;
+        width: 80px !important;
+        height: 2px !important;
+        background-color: #2a2a2a !important;
+        border-radius: 2px !important;
+        overflow: hidden !important;
       }
       .tm-progress-fill {
-        height: 100%;
-        width: 0%;
-        background-color: #0095f6;
-        transition: width 150ms ease;
+        height: 100% !important;
+        width: 0% !important;
+        background-color: #0095f6 !important;
+        transition: width 150ms ease !important;
       }
 
-      /* Checkbox Pill on Media Items (Safe absolute positioning) */
+      /* Checkbox Pill on Media Items */
       .tm-checkbox-pill {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        background-color: rgba(18, 18, 18, 0.75);
-        border: 1.5px solid #555555;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        z-index: 50;
-        transition: all 150ms ease;
+        position: absolute !important;
+        top: 10px !important;
+        right: 10px !important;
+        width: 26px !important;
+        height: 26px !important;
+        border-radius: 50% !important;
+        background-color: rgba(18, 18, 18, 0.75) !important;
+        border: 1.5px solid #555555 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        cursor: pointer !important;
+        z-index: 50 !important;
+        transition: all 150ms ease !important;
       }
       .tm-checkbox-pill svg {
-        opacity: 0;
-        transform: scale(0.6);
-        transition: all 150ms ease;
+        opacity: 0 !important;
+        transform: scale(0.6) !important;
+        transition: all 150ms ease !important;
       }
       .tm-checkbox-pill.active {
-        background-color: #0095f6;
-        border-color: #0095f6;
+        background-color: #0095f6 !important;
+        border-color: #0095f6 !important;
       }
       .tm-checkbox-pill.active svg {
-        opacity: 1;
-        transform: scale(1);
+        opacity: 1 !important;
+        transform: scale(1) !important;
       }
 
       /* Selection Floating Bar */
       .tm-select-bar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin: 8px 0;
-        padding: 10px 14px;
-        background-color: #161616;
-        border: 1px solid #2a2a2a;
-        border-radius: 8px;
-        font-size: 13px;
-        color: #ffffff;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        margin: 8px 0 !important;
+        padding: 10px 14px !important;
+        background-color: #161616 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 8px !important;
+        font-size: 13px !important;
+        color: #ffffff !important;
       }
       .tm-select-actions {
-        display: flex;
-        gap: 8px;
+        display: flex !important;
+        gap: 8px !important;
       }
       .tm-btn-primary {
-        background-color: #0095f6;
-        color: #ffffff;
-        border: none;
-        padding: 6px 14px;
-        border-radius: 6px;
-        font-weight: 600;
-        font-size: 12px;
-        cursor: pointer;
-        transition: background-color 150ms ease;
+        background-color: #0095f6 !important;
+        color: #ffffff !important;
+        border: none !important;
+        padding: 6px 14px !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        font-size: 12px !important;
+        cursor: pointer !important;
+        transition: background-color 150ms ease !important;
       }
-      .tm-btn-primary:hover { background-color: #1877f2; }
+      .tm-btn-primary:hover { background-color: #1877f2 !important; }
       .tm-btn-sub {
-        background-color: #242424;
-        color: #e0e0e0;
-        border: 1px solid #333333;
-        padding: 6px 12px;
-        border-radius: 6px;
-        font-size: 12px;
-        cursor: pointer;
-        transition: background-color 150ms ease;
+        background-color: #242424 !important;
+        color: #e0e0e0 !important;
+        border: 1px solid #333333 !important;
+        padding: 6px 12px !important;
+        border-radius: 6px !important;
+        font-size: 12px !important;
+        cursor: pointer !important;
+        transition: background-color 150ms ease !important;
       }
-      .tm-btn-sub:hover { background-color: #2e2e2e; }
+      .tm-btn-sub:hover { background-color: #2e2e2e !important; }
       .tm-btn-cancel {
-        background: transparent;
-        color: #888888;
-        border: none;
-        padding: 6px 10px;
-        font-size: 12px;
-        cursor: pointer;
+        background: transparent !important;
+        color: #888888 !important;
+        border: none !important;
+        padding: 6px 10px !important;
+        font-size: 12px !important;
+        cursor: pointer !important;
       }
-      .tm-btn-cancel:hover { color: #cccccc; }
+      .tm-btn-cancel:hover { color: #cccccc !important; }
 
       /* Video Booster Controls */
       .tm-video-controls {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        z-index: 40;
-        opacity: 0;
-        transition: opacity 150ms ease;
+        position: absolute !important;
+        top: 12px !important;
+        right: 12px !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        z-index: 40 !important;
+        opacity: 0 !important;
+        transition: opacity 150ms ease !important;
       }
       div:hover > .tm-video-controls, .tm-video-controls:hover {
-        opacity: 1;
+        opacity: 1 !important;
       }
       .tm-video-btn {
-        background-color: rgba(18, 18, 18, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 6px;
-        color: #ffffff;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 4px 8px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        background-color: rgba(18, 18, 18, 0.85) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        border-radius: 6px !important;
+        color: #ffffff !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        padding: 4px 8px !important;
+        cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
       }
       .tm-video-btn:hover {
-        background-color: #000000;
-        border-color: rgba(255, 255, 255, 0.35);
+        background-color: #000000 !important;
+        border-color: rgba(255, 255, 255, 0.35) !important;
       }
 
       /* Thread Unroller Modal */
       #tm-reader-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 1000000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        animation: tmFadeIn 150ms ease;
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 1000000 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        animation: tmFadeIn 150ms ease !important;
       }
       .tm-reader-overlay {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.82);
+        position: absolute !important;
+        inset: 0 !important;
+        background: rgba(0, 0, 0, 0.82) !important;
       }
       .tm-reader-card {
-        position: relative;
-        width: 90%;
-        max-width: 680px;
-        max-height: 85vh;
-        background: #141414;
-        border: 1px solid #2a2a2a;
-        border-radius: 12px;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.9);
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
+        position: relative !important;
+        width: 90% !important;
+        max-width: 680px !important;
+        max-height: 85vh !important;
+        background: #141414 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 12px !important;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.9) !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
       }
       .tm-reader-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 20px;
-        border-bottom: 1px solid #242424;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 16px 20px !important;
+        border-bottom: 1px solid #242424 !important;
       }
       .tm-reader-title {
-        font-size: 16px;
-        font-weight: 700;
-        color: #ffffff;
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        color: #ffffff !important;
       }
       .tm-reader-author {
-        font-size: 12px;
-        color: #888888;
-        margin-top: 2px;
+        font-size: 12px !important;
+        color: #888888 !important;
+        margin-top: 2px !important;
       }
       .tm-reader-header-actions {
-        display: flex;
-        gap: 8px;
+        display: flex !important;
+        gap: 8px !important;
       }
       .tm-reader-body {
-        padding: 20px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
+        padding: 20px !important;
+        overflow-y: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 16px !important;
       }
       .tm-reader-segment {
-        padding: 14px;
-        background: #1a1a1a;
-        border: 1px solid #282828;
-        border-radius: 8px;
-        position: relative;
+        padding: 14px !important;
+        background: #1a1a1a !important;
+        border: 1px solid #282828 !important;
+        border-radius: 8px !important;
+        position: relative !important;
       }
       .tm-segment-badge {
-        display: inline-block;
-        font-size: 11px;
-        font-weight: 700;
-        color: #0095f6;
-        margin-bottom: 6px;
+        display: inline-block !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        color: #0095f6 !important;
+        margin-bottom: 6px !important;
       }
       .tm-segment-text {
-        font-size: 14px;
-        line-height: 1.6;
-        color: #e4e6eb;
+        font-size: 14px !important;
+        line-height: 1.6 !important;
+        color: #e4e6eb !important;
       }
       .tm-segment-media-hint {
-        margin-top: 8px;
-        font-size: 11px;
-        color: #777777;
+        margin-top: 8px !important;
+        font-size: 11px !important;
+        color: #777777 !important;
       }
 
       /* Composer Bar */
       .tm-composer-bar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 6px 12px;
-        font-size: 11px;
-        color: #888888;
-        border-top: 1px solid #242424;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 6px 12px !important;
+        font-size: 11px !important;
+        color: #888888 !important;
+        border-top: 1px solid #242424 !important;
       }
-      .tm-hook-status { font-weight: 500; }
-      .tm-hook-safe { color: #10b981; }
-      .tm-hook-cut { color: #f59e0b; }
-      .tm-hook-over { color: #ef4444; }
+      .tm-hook-status { font-weight: 500 !important; }
+      .tm-hook-safe { color: #10b981 !important; }
+      .tm-hook-cut { color: #f59e0b !important; }
+      .tm-hook-over { color: #ef4444 !important; }
 
       /* Clean Toast */
       #tm-toast {
-        position: fixed;
-        bottom: 36px;
-        left: 50%;
-        transform: translateX(-50%) translateY(20px);
-        background-color: #181818;
-        color: #f0f0f0;
-        border: 1px solid #333333;
-        padding: 8px 18px;
-        border-radius: 20px;
-        font-size: 13px;
-        font-weight: 500;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
-        opacity: 0;
-        pointer-events: none;
-        transition: transform 200ms ease, opacity 200ms ease;
-        z-index: 9999999;
+        position: fixed !important;
+        bottom: 36px !important;
+        left: 50% !important;
+        transform: translateX(-50%) translateY(20px) !important;
+        background-color: #181818 !important;
+        color: #f0f0f0 !important;
+        border: 1px solid #333333 !important;
+        padding: 8px 18px !important;
+        border-radius: 20px !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7) !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: transform 200ms ease, opacity 200ms ease !important;
+        z-index: 9999999 !important;
       }
       #tm-toast.tm-toast-visible {
-        opacity: 1;
-        transform: translateX(-50%) translateY(0);
+        opacity: 1 !important;
+        transform: translateX(-50%) translateY(0) !important;
       }
     `;
     document.head.appendChild(style);
@@ -1354,7 +1372,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    console.info('[ThreadMax] v1.1.0 initialized successfully');
+    console.info('[ThreadMax] v1.1.1 initialized successfully');
   }
 
   if (document.readyState === 'loading') {

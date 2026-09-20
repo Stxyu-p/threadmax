@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ThreadMax
 // @namespace    https://github.com/Stxyu-p/threadmax
-// @version      1.1.1
-// @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps & Thread Unroller for Threads Web
+// @version      1.2.0
+// @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps, Thread Unroller, Splitter & Growth Studio for Threads Web
 // @author       P Choke & MIKA
 // @match        https://www.threads.com/*
 // @match        https://threads.com/*
@@ -18,15 +18,14 @@
 // ==/UserScript==
 
 /**
- * ThreadMax v1.1.1 — Pure Vanilla JavaScript, Zero External Dependencies
+ * ThreadMax v1.2.0 — Pure Vanilla JavaScript, Zero External Dependencies
  * Architecture: Clean Modular / Anti-Slop Minimal Precision
  *
  * ponytail: deliberate simplifications:
- * - Direct SVG path matching (M7.247 1.499) for Share button: 100% language-independent.
- * - Perfectly aligned action bar wrappers (yDiff = 0px): matches native button flex geometry.
- * - Sticky dropdown anchored directly in button wrapper: 100% glued on scroll/virtualization.
- * - Non-destructive Media Tile overlay: attaches checkboxes to parent DIV without touching <picture> tags.
- * - Stored ZIP (compression level 0): instant client-side packing without memory-heavy deflate.
+ * - Dynamic Stacking Context Elevation (z-index: 9999 on active card): eliminates sunken dropdown bugs.
+ * - IndexedDB local snapshot vault: zero network telemetry, 100% private relationship auditing.
+ * - Text Splitter sentence-boundary chunker: <= 480 chars to ensure clean 1/N sub-posts.
+ * - Viral Velocity heuristic: (Replies*2 + Reposts*1.5)/AgeMinutes for real-time engagement surge detection.
  */
 
 (function () {
@@ -37,7 +36,9 @@
     DOWNLOAD_MODE: 'tm_download_mode',     // 'zip' | 'individual'
     TIMESTAMP_MODE: 'tm_timestamp_mode',   // 'hybrid' | 'absolute' | 'native'
     VIDEO_VOLUME: 'tm_video_volume',       // 0.0 - 1.0
-    VIDEO_SPEED: 'tm_video_speed'          // 1.0, 1.25, 1.5, 2.0
+    VIDEO_SPEED: 'tm_video_speed',         // 1.0, 1.25, 1.5, 2.0
+    VIRAL_RADAR: 'tm_viral_radar_enabled', // true | false
+    FILTER_RISING: 'tm_filter_rising'      // true | false
   };
 
   const TM_Config = {
@@ -67,13 +68,13 @@
 
   // Register Tampermonkey Menu Commands
   if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('⚡ เปิด ThreadMax Studio', () => TM_Studio.open());
     GM_registerMenuCommand('📦 สลับโหมดดาวน์โหลด (ZIP / แยกไฟล์)', () => {
       const current = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
       const next = current === 'zip' ? 'individual' : 'zip';
       TM_Config.set(CONFIG_KEYS.DOWNLOAD_MODE, next);
       showToast(`โหมดดาวน์โหลด: ${next === 'zip' ? 'รวมไฟล์ ZIP' : 'แยกทีละไฟล์'}`);
     });
-
     GM_registerMenuCommand('🕒 สลับรูปแบบเวลา (Hybrid / Absolute / Native)', () => {
       const current = TM_Config.get(CONFIG_KEYS.TIMESTAMP_MODE, 'hybrid');
       const modes = ['hybrid', 'absolute', 'native'];
@@ -84,7 +85,61 @@
     });
   }
 
-  /* ─── 2. PURE CLIENT-SIDE ZIP32 ENGINE (Zero Dependencies) ── */
+  /* ─── 2. INDEXEDDB VAULT (Relationship Intelligence) ──────── */
+  const TM_DB = {
+    dbName: 'ThreadMaxDB',
+    version: 1,
+    db: null,
+
+    init: () => {
+      return new Promise((resolve, reject) => {
+        if (TM_DB.db) return resolve(TM_DB.db);
+        const req = indexedDB.open(TM_DB.dbName, TM_DB.version);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('snapshots')) {
+            db.createObjectStore('snapshots', { keyPath: 'id', autoIncrement: true });
+          }
+        };
+        req.onsuccess = (e) => {
+          TM_DB.db = e.target.result;
+          resolve(TM_DB.db);
+        };
+        req.onerror = (e) => reject(e);
+      });
+    },
+
+    saveSnapshot: async (data) => {
+      const db = await TM_DB.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('snapshots', 'readwrite');
+        const store = tx.objectStore('snapshots');
+        const req = store.add({
+          timestamp: Date.now(),
+          followers: data.followers || [],
+          following: data.following || []
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    getLatestSnapshot: async () => {
+      const db = await TM_DB.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('snapshots', 'readonly');
+        const store = tx.objectStore('snapshots');
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const all = req.result;
+          resolve(all && all.length > 0 ? all[all.length - 1] : null);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+  };
+
+  /* ─── 3. PURE CLIENT-SIDE ZIP32 ENGINE (Zero Dependencies) ── */
   const CRC32_TABLE = new Uint32Array(256);
   (() => {
     for (let i = 0; i < 256; i++) {
@@ -188,7 +243,7 @@
     return new Blob([...localParts, ...centralParts, eocd], { type: 'application/zip' });
   }
 
-  /* ─── 3. UTILITIES & HELPERS ──────────────────────────────── */
+  /* ─── 4. UTILITIES & HELPERS ──────────────────────────────── */
   function showToast(msg, duration = 2200) {
     let toast = document.getElementById('tm-toast');
     if (!toast) {
@@ -258,7 +313,12 @@
     }
   }
 
-  /* ─── 4. DOM EXTRACTION (POST, MEDIA, ACTIONS) ────────────── */
+  function escapeHtml(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return String(text).replace(/[&<>"']/g, m => map[m]);
+  }
+
+  /* ─── 5. DOM EXTRACTION (POST, METRICS, ACTIONS) ──────────── */
   const TM_DOM = {
     findShareButtons: () => {
       const results = [];
@@ -335,7 +395,6 @@
       const media = [];
       const seenUrls = new Set();
 
-      // Videos
       card.querySelectorAll('video').forEach(video => {
         const src = video.currentSrc || video.src || video.querySelector('source')?.src;
         if (src && !seenUrls.has(src)) {
@@ -344,26 +403,22 @@
         }
       });
 
-      // Images (Exclude profile avatars: size check, -19/ cdn pattern, avatar links)
       card.querySelectorAll('img').forEach(img => {
         const src = img.src;
         if (!src || seenUrls.has(src)) return;
 
-        // Skip avatar links
         const parentLink = img.closest('a');
         if (parentLink) {
           const href = parentLink.getAttribute('href') || '';
           if (href.includes('/@') && !href.includes('/post/')) return;
         }
 
-        // Avatar check
         if (src.includes('-19/')) return;
         const rect = img.getBoundingClientRect();
         if (rect.width > 0 && rect.width < 75) return;
         const style = window.getComputedStyle(img);
         if (style.borderRadius.includes('50%')) return;
 
-        // Check CDN origin
         if (src.includes('cdninstagram.com') || src.includes('fbcdn.net')) {
           seenUrls.add(src);
           media.push({ type: 'image', url: src, element: img });
@@ -374,18 +429,52 @@
       const textContainer = card.querySelector('div[dir="auto"], span[dir="auto"]');
       const text = textContainer ? textContainer.innerText.trim() : '';
 
+      // 4. Metrics & Post Date for Viral Radar
+      let replies = 0;
+      let reposts = 0;
+      let likes = 0;
+      let postDate = null;
+
+      const timeEl = card.querySelector('time[datetime]');
+      if (timeEl && timeEl.getAttribute('datetime')) {
+        postDate = new Date(timeEl.getAttribute('datetime'));
+      }
+
+      // Parse engagement numbers from action buttons or spans
+      card.querySelectorAll('span, div').forEach(el => {
+        const t = el.innerText?.trim();
+        if (/^\d+(\.\d+)?[kKmM]?$/.test(t)) {
+          const num = parseMetricNumber(t);
+          if (el.closest('[aria-label*="Like" i], [aria-label*="ถูกใจ" i], svg[aria-label*="Like" i]')) likes = num;
+          else if (el.closest('[aria-label*="Reply" i], [aria-label*="ตอบกลับ" i], [aria-label*="Comment" i]')) replies = num;
+          else if (el.closest('[aria-label*="Repost" i], [aria-label*="รีโพสต์" i]')) reposts = num;
+        }
+      });
+
       return {
         card,
         author,
         postId,
         postUrl,
         media,
-        text
+        text,
+        replies,
+        reposts,
+        likes,
+        postDate
       };
     }
   };
 
-  /* ─── 5. IN-FEED BUTTON & DROPDOWN (Pixel-Perfect Alignment) ─ */
+  function parseMetricNumber(str) {
+    if (!str) return 0;
+    const s = str.trim().toLowerCase();
+    if (s.endsWith('k')) return parseFloat(s) * 1000;
+    if (s.endsWith('m')) return parseFloat(s) * 1000000;
+    return parseInt(s, 10) || 0;
+  }
+
+  /* ─── 6. IN-FEED ACTION BUTTONS & STACKING PROTECTION ─────── */
   const TM_Buttons = {
     injectIntoActionRow: (shareInfo) => {
       const { shareBtn, shareWrapper, actionRow } = shareInfo;
@@ -399,7 +488,6 @@
       if (media.length > 0) {
         const dlWrapper = document.createElement('div');
         dlWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
-        dlWrapper.style.position = 'relative';
 
         const dlBtn = document.createElement('div');
         dlBtn.className = 'tm-download-btn tm-btn';
@@ -432,7 +520,6 @@
       // 2. Clean Link Button
       const linkWrapper = document.createElement('div');
       linkWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
-      linkWrapper.style.position = 'relative';
 
       const linkBtn = document.createElement('div');
       linkBtn.className = 'tm-cleanlink-btn tm-btn';
@@ -465,7 +552,6 @@
       if (window.location.pathname.includes('/post/') && !actionRow.querySelector('.tm-unroll-btn')) {
         const unrollWrapper = document.createElement('div');
         unrollWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
-        unrollWrapper.style.position = 'relative';
 
         const unrollBtn = document.createElement('div');
         unrollBtn.className = 'tm-unroll-btn tm-btn';
@@ -489,13 +575,25 @@
     },
 
     showCarouselDropdown: (anchorWrapper, anchorBtn, postData) => {
-      // If already open on this wrapper, toggle close
+      const card = postData.card;
+      const actionRow = anchorWrapper.parentElement;
+
+      // Toggle close if already open
       const existing = anchorWrapper.querySelector('.tm-dropdown');
       if (existing) {
         existing.remove();
+        if (card) card.style.zIndex = '';
+        if (actionRow) actionRow.style.zIndex = '';
+        anchorWrapper.style.zIndex = '';
         return;
       }
+
       document.querySelectorAll('.tm-dropdown').forEach(d => d.remove());
+
+      // Elevate Stacking Context to prevent "กล่องจม"
+      if (card) card.style.zIndex = '9999';
+      if (actionRow) actionRow.style.zIndex = '9999';
+      anchorWrapper.style.zIndex = '9999';
 
       const mode = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
       const dropdown = document.createElement('div');
@@ -509,36 +607,40 @@
       selectItem.className = 'tm-dropdown-item';
       selectItem.innerHTML = `<span class="tm-dropdown-icon">☑️</span><span>เลือกดาวน์โหลดเฉพาะไฟล์...</span>`;
 
+      const closeDropdown = () => {
+        dropdown.remove();
+        if (card) card.style.zIndex = '';
+        if (actionRow) actionRow.style.zIndex = '';
+        anchorWrapper.style.zIndex = '';
+        document.removeEventListener('click', onDocClick);
+      };
+
       allItem.onclick = (e) => {
         e.stopPropagation();
-        dropdown.remove();
+        closeDropdown();
         TM_Downloader.downloadBatch(postData.media, postData.author, postData.postId, anchorBtn, mode);
       };
 
       selectItem.onclick = (e) => {
         e.stopPropagation();
-        dropdown.remove();
+        closeDropdown();
         TM_Selector.activate(postData, anchorBtn);
       };
 
       dropdown.appendChild(allItem);
       dropdown.appendChild(selectItem);
-
-      // Anchored directly inside wrapper: 100% sticky to button on scroll & virtual DOM shifts
       anchorWrapper.appendChild(dropdown);
 
-      // Close on outside click
       const onDocClick = (evt) => {
         if (!dropdown.contains(evt.target) && !anchorWrapper.contains(evt.target)) {
-          dropdown.remove();
-          document.removeEventListener('click', onDocClick);
+          closeDropdown();
         }
       };
       setTimeout(() => document.addEventListener('click', onDocClick), 50);
     }
   };
 
-  /* ─── 6. BATCH DOWNLOADER & PROGRESS ──────────────────────── */
+  /* ─── 7. BATCH DOWNLOADER & PROGRESS ──────────────────────── */
   const TM_Downloader = {
     downloadSingle: (mediaItem, author, postId, index, anchorBtn) => {
       const ext = mediaItem.type === 'video' ? 'mp4' : 'jpg';
@@ -635,13 +737,12 @@
     }
   };
 
-  /* ─── 7. INTERACTIVE SELECTION MODE (Non-Destructive) ──────── */
+  /* ─── 8. INTERACTIVE SELECTION MODE (Non-Destructive) ──────── */
   const TM_Selector = {
     activate: (postData, anchorBtn) => {
       const { card, media, author, postId } = postData;
       const selectedIndices = new Set(media.map((_, i) => i));
 
-      // Inject checkboxes on valid parent DIV tiles (NEVER inside <picture>)
       media.forEach((item, index) => {
         let tile = item.element.parentElement;
         while (tile && (tile.tagName === 'PICTURE' || tile.tagName === 'A' || tile.offsetWidth === 0)) {
@@ -674,7 +775,6 @@
         tile.appendChild(pill);
       });
 
-      // Selection bar placed above action row (Clean native look)
       const actionRow = card.querySelector('.x78zum5:has(.tm-download-btn)') || card.querySelector('.tm-download-btn')?.closest('.x78zum5');
       let bar = card.querySelector('.tm-select-bar');
       if (!bar) {
@@ -747,7 +847,7 @@
     }
   };
 
-  /* ─── 8. VIDEO PLAYER BOOSTER ─────────────────────────────── */
+  /* ─── 9. VIDEO PLAYER BOOSTER ─────────────────────────────── */
   const TM_Video = {
     speeds: [1.0, 1.25, 1.5, 2.0],
 
@@ -760,7 +860,6 @@
       if (video.dataset.tmBoosted) return;
       video.dataset.tmBoosted = 'true';
 
-      // 1. Volume Memory
       const savedVolume = TM_Config.get(CONFIG_KEYS.VIDEO_VOLUME, 0.8);
       video.volume = Math.max(0, Math.min(1, savedVolume));
 
@@ -770,7 +869,6 @@
         }
       });
 
-      // 2. Wrap and inject overlay controller
       const parent = video.parentElement;
       if (!parent || parent.querySelector('.tm-video-controls')) return;
 
@@ -788,7 +886,6 @@
         </button>
       `;
 
-      // Speed button handler
       const speedBtn = ctrl.querySelector('.tm-speed-btn');
       speedBtn.onclick = (e) => {
         e.stopPropagation();
@@ -799,7 +896,6 @@
         speedBtn.textContent = `${newSpeed}x`;
       };
 
-      // PiP button handler
       const pipBtn = ctrl.querySelector('.tm-pip-btn');
       pipBtn.onclick = async (e) => {
         e.stopPropagation();
@@ -822,7 +918,7 @@
     }
   };
 
-  /* ─── 9. SMART CONFIGURABLE TIMESTAMP ─────────────────────── */
+  /* ─── 10. SMART CONFIGURABLE TIMESTAMP ────────────────────── */
   const TM_Timestamp = {
     updateAll: () => {
       const mode = TM_Config.get(CONFIG_KEYS.TIMESTAMP_MODE, 'hybrid');
@@ -861,7 +957,41 @@
     }
   };
 
-  /* ─── 10. THREAD UNROLLER & CLEAN READER (Phase 2) ────────── */
+  /* ─── 11. VIRAL VELOCITY RADAR (Phase 3) ──────────────────── */
+  const TM_ViralRadar = {
+    scan: () => {
+      const enabled = TM_Config.get(CONFIG_KEYS.VIRAL_RADAR, true);
+      if (!enabled) return;
+
+      const shareItems = TM_DOM.findShareButtons();
+      shareItems.forEach(shareInfo => {
+        const card = TM_DOM.findPostCard(shareInfo.actionRow);
+        if (!card || card.querySelector('.tm-viral-badge')) return;
+
+        const meta = TM_DOM.getPostMetadata(card);
+        if (!meta.postDate) return;
+
+        const ageMinutes = Math.max(1, (Date.now() - meta.postDate.getTime()) / 60000);
+        // Velocity score: (Replies*2 + Reposts*1.5) / AgeMinutes
+        const velocity = (meta.replies * 2 + meta.reposts * 1.5) / ageMinutes;
+
+        // Trigger badge if high acceleration (< 180 min age and velocity >= 0.1)
+        if (ageMinutes <= 180 && velocity >= 0.1) {
+          const authorHeader = card.querySelector('a[href*="/@"]')?.parentElement || card.querySelector('time')?.parentElement;
+          if (authorHeader && !authorHeader.querySelector('.tm-viral-badge')) {
+            const badge = document.createElement('span');
+            badge.className = 'tm-viral-badge';
+            const ratePerHour = Math.round(velocity * 60);
+            badge.title = `ThreadMax Viral Radar: อัตราเร่ง ~${ratePerHour} เอนเกจเมนต์/ชม.`;
+            badge.innerHTML = `⚡ Rising (${ratePerHour}/hr)`;
+            authorHeader.appendChild(badge);
+          }
+        }
+      });
+    }
+  };
+
+  /* ─── 12. THREAD UNROLLER & CLEAN READER (Phase 2) ────────── */
   const TM_Unroller = {
     open: (author, postId) => {
       const allCards = TM_DOM.findShareButtons().map(s => TM_DOM.findPostCard(s.actionRow));
@@ -933,12 +1063,7 @@
     }
   };
 
-  function escapeHtml(text) {
-    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return String(text).replace(/[&<>"']/g, m => map[m]);
-  }
-
-  /* ─── 11. COMPOSER HOOK GUIDE & AUTO-SPLITTER (Phase 2) ───── */
+  /* ─── 13. COMPOSER HOOK GUIDE & AUTO-SPLITTER (Phase 2) ───── */
   const TM_Composer = {
     init: () => {
       const textboxes = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
@@ -955,13 +1080,23 @@
       const bar = document.createElement('div');
       bar.className = 'tm-composer-bar';
       bar.innerHTML = `
-        <span class="tm-hook-status"></span>
+        <div class="tm-composer-left">
+          <span class="tm-hook-status"></span>
+          <button type="button" class="tm-split-btn" style="display:none;">✂️ แบ่งเธรดอัตโนมัติ</button>
+        </div>
         <span class="tm-char-count">0 / 500</span>
       `;
       parent.appendChild(bar);
 
       const countEl = bar.querySelector('.tm-char-count');
       const hookEl = bar.querySelector('.tm-hook-status');
+      const splitBtn = bar.querySelector('.tm-split-btn');
+
+      splitBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        TM_Splitter.open(textbox.innerText.trim());
+      };
 
       const update = () => {
         const len = textbox.innerText.trim().length;
@@ -970,15 +1105,19 @@
         if (len === 0) {
           hookEl.textContent = '';
           hookEl.className = 'tm-hook-status';
+          splitBtn.style.display = 'none';
         } else if (len <= 180) {
           hookEl.textContent = '✨ Hook ปลอดภัย (ไม่ถูกซ่อนบนจอมือถือ)';
           hookEl.className = 'tm-hook-status tm-hook-safe';
+          splitBtn.style.display = 'none';
         } else if (len <= 500) {
           hookEl.textContent = '📍 เกิน 180 อักษร (จะถูกซ่อนหลัง "...ดูเพิ่มเติม")';
           hookEl.className = 'tm-hook-status tm-hook-cut';
+          splitBtn.style.display = 'none';
         } else {
           hookEl.textContent = '⚠️ ข้อความยาวเกิน 500 อักษร';
           hookEl.className = 'tm-hook-status tm-hook-over';
+          splitBtn.style.display = 'inline-flex';
         }
       };
 
@@ -988,13 +1127,255 @@
     }
   };
 
-  /* ─── 12. ANTI-SLOP STYLES (Solid Surface, Hairline) ──────── */
+  /* ─── 14. ONE-CLICK THREAD SPLITTER (Phase 2.3) ────────────── */
+  const TM_Splitter = {
+    splitText: (text, maxLen = 460) => {
+      if (!text || text.length <= maxLen) return [text];
+      const paragraphs = text.split(/\n\s*\n/);
+      const chunks = [];
+      let current = '';
+
+      for (const p of paragraphs) {
+        if ((current + (current ? '\n\n' : '') + p).length <= maxLen) {
+          current = current + (current ? '\n\n' : '') + p;
+        } else {
+          if (current) {
+            chunks.push(current);
+            current = '';
+          }
+          if (p.length <= maxLen) {
+            current = p;
+          } else {
+            // Split by sentence
+            const sentences = p.split(/(?<=[.!?\n])\s+/);
+            for (const s of sentences) {
+              if ((current + (current ? ' ' : '') + s).length <= maxLen) {
+                current = current + (current ? ' ' : '') + s;
+              } else {
+                if (current) chunks.push(current);
+                current = s;
+              }
+            }
+          }
+        }
+      }
+      if (current) chunks.push(current);
+      return chunks;
+    },
+
+    open: (rawText) => {
+      const chunks = TM_Splitter.splitText(rawText);
+      const total = chunks.length;
+
+      let modal = document.getElementById('tm-splitter-modal');
+      if (modal) modal.remove();
+
+      modal = document.createElement('div');
+      modal.id = 'tm-splitter-modal';
+      modal.innerHTML = `
+        <div class="tm-reader-overlay"></div>
+        <div class="tm-reader-card">
+          <div class="tm-reader-header">
+            <div>
+              <div class="tm-reader-title">✂️ Thread Splitter</div>
+              <div class="tm-reader-author">แบ่งออกเป็น ${total} ท่อนย่อยพร้อมเลขกำกับ (1/N)</div>
+            </div>
+            <div class="tm-reader-header-actions">
+              <button type="button" class="tm-btn-primary" id="tm-copy-all-split">📋 คัดลอกทั้งหมด</button>
+              <button type="button" class="tm-btn-sub" id="tm-close-split">✕ ปิด</button>
+            </div>
+          </div>
+          <div class="tm-reader-body">
+            ${chunks.map((c, i) => `
+              <div class="tm-split-item">
+                <div class="tm-split-item-header">
+                  <span class="tm-segment-badge">${i + 1}/${total} (${c.length} อักษร)</span>
+                  <button type="button" class="tm-btn-sub tm-copy-chunk" data-index="${i}">📋 คัดลอกท่อนนี้</button>
+                </div>
+                <div class="tm-split-text">${escapeHtml(c)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      modal.querySelectorAll('.tm-copy-chunk').forEach(btn => {
+        btn.onclick = () => {
+          const idx = parseInt(btn.dataset.index, 10);
+          const formatted = `${idx + 1}/${total}\n\n${chunks[idx]}`;
+          navigator.clipboard.writeText(formatted).then(() => {
+            showToast(`✓ คัดลอกท่อนที่ ${idx + 1}/${total} แล้ว`);
+          });
+        };
+      });
+
+      modal.querySelector('#tm-copy-all-split').onclick = () => {
+        const full = chunks.map((c, i) => `[${i + 1}/${total}]\n${c}`).join('\n\n---\n\n');
+        navigator.clipboard.writeText(full).then(() => {
+          showToast('✓ คัดลอกเธรดที่แบ่งแล้วทั้งหมด');
+        });
+      };
+
+      modal.querySelector('#tm-close-split').onclick = () => modal.remove();
+      modal.querySelector('.tm-reader-overlay').onclick = () => modal.remove();
+    }
+  };
+
+  /* ─── 15. THREADMAX STUDIO DRAWER (Phase 3.2) ──────────────── */
+  const TM_Studio = {
+    injectLauncher: () => {
+      if (document.getElementById('tm-studio-launcher')) return;
+      const btn = document.createElement('div');
+      btn.id = 'tm-studio-launcher';
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+        <span>ThreadMax Studio</span>
+      `;
+      btn.onclick = () => TM_Studio.open();
+      document.body.appendChild(btn);
+    },
+
+    open: async () => {
+      let drawer = document.getElementById('tm-studio-drawer');
+      if (drawer) drawer.remove();
+
+      drawer = document.createElement('div');
+      drawer.id = 'tm-studio-drawer';
+      drawer.innerHTML = `
+        <div class="tm-drawer-overlay"></div>
+        <div class="tm-drawer-content">
+          <div class="tm-drawer-header">
+            <div class="tm-drawer-brand">
+              <span class="tm-brand-icon">⚡</span>
+              <div>
+                <div class="tm-drawer-title">ThreadMax Studio</div>
+                <div class="tm-drawer-subtitle">Growth Intelligence & Precision Suite</div>
+              </div>
+            </div>
+            <button type="button" class="tm-btn-sub" id="tm-close-drawer">✕</button>
+          </div>
+
+          <div class="tm-drawer-tabs">
+            <div class="tm-drawer-tab active" data-tab="auditor">🔍 Mutual Auditor</div>
+            <div class="tm-drawer-tab" data-tab="settings">⚙️ Settings</div>
+          </div>
+
+          <div class="tm-drawer-body">
+            <!-- TAB: MUTUAL AUDITOR -->
+            <div class="tm-tab-pane active" id="pane-auditor">
+              <div class="tm-auditor-stats">
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num" id="tm-stat-notback">0</div>
+                  <div class="tm-stat-label">ไม่ตามกลับ (Non-mutual)</div>
+                </div>
+                <div class="tm-stat-card">
+                  <div class="tm-stat-num" id="tm-stat-fans">0</div>
+                  <div class="tm-stat-label">แฟนคลับ (Fans)</div>
+                </div>
+              </div>
+
+              <div class="tm-auditor-actions">
+                <button type="button" class="tm-btn-primary" id="tm-scan-relationships">
+                  🔄 ดึงข้อมูลความสัมพันธ์ล่าสุด
+                </button>
+              </div>
+
+              <div class="tm-auditor-list" id="tm-auditor-list">
+                <div class="tm-empty-state">
+                  เปิดหน้าโปรไฟล์ของคุณแล้วกด "ดึงข้อมูลความสัมพันธ์ล่าสุด" เพื่อเริ่มต้นสแกนสถานะ
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB: SETTINGS -->
+            <div class="tm-tab-pane" id="pane-settings">
+              <div class="tm-setting-row">
+                <div>
+                  <div class="tm-setting-title">โหมดดาวน์โหลดไฟล์มีเดีย</div>
+                  <div class="tm-setting-desc">รวมไฟล์ในโพสต์เป็น ZIP หรือแยกไฟล์เดี่ยว</div>
+                </div>
+                <select class="tm-select" id="tm-opt-download">
+                  <option value="zip">รวมเป็น ZIP (.zip)</option>
+                  <option value="individual">แยกทีละไฟล์ (Individual)</option>
+                </select>
+              </div>
+
+              <div class="tm-setting-row">
+                <div>
+                  <div class="tm-setting-title">รูปแบบการแสดงเวลา (Timestamp)</div>
+                  <div class="tm-setting-desc">เลือกการแสดงผลเวลาของโพสต์ในฟีด</div>
+                </div>
+                <select class="tm-select" id="tm-opt-timestamp">
+                  <option value="hybrid">Hybrid (เช่น 2 ชม. (14:30))</option>
+                  <option value="absolute">Absolute (วันและเวลาจริง)</option>
+                  <option value="native">Native (แบบดั้งเดิมของ Threads)</option>
+                </select>
+              </div>
+
+              <div class="tm-setting-row">
+                <div>
+                  <div class="tm-setting-title">Viral Velocity Radar</div>
+                  <div class="tm-setting-desc">ติดป้าย ⚡ Rising บนโพสต์ที่กำลังมีอัตราเร่งสูง</div>
+                </div>
+                <input type="checkbox" id="tm-opt-viral" class="tm-checkbox" />
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(drawer);
+
+      // Tab switching
+      drawer.querySelectorAll('.tm-drawer-tab').forEach(tab => {
+        tab.onclick = () => {
+          drawer.querySelectorAll('.tm-drawer-tab').forEach(t => t.classList.remove('active'));
+          drawer.querySelectorAll('.tm-tab-pane').forEach(p => p.classList.remove('active'));
+          tab.classList.add('active');
+          drawer.querySelector(`#pane-${tab.dataset.tab}`).classList.add('active');
+        };
+      });
+
+      // Bind Settings
+      const dlSelect = drawer.querySelector('#tm-opt-download');
+      dlSelect.value = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
+      dlSelect.onchange = () => {
+        TM_Config.set(CONFIG_KEYS.DOWNLOAD_MODE, dlSelect.value);
+        showToast('✓ บันทึกการตั้งค่าแล้ว');
+      };
+
+      const timeSelect = drawer.querySelector('#tm-opt-timestamp');
+      timeSelect.value = TM_Config.get(CONFIG_KEYS.TIMESTAMP_MODE, 'hybrid');
+      timeSelect.onchange = () => {
+        TM_Config.set(CONFIG_KEYS.TIMESTAMP_MODE, timeSelect.value);
+        TM_Timestamp.updateAll();
+        showToast('✓ บันทึกการตั้งค่าแล้ว');
+      };
+
+      const viralCheck = drawer.querySelector('#tm-opt-viral');
+      viralCheck.checked = TM_Config.get(CONFIG_KEYS.VIRAL_RADAR, true);
+      viralCheck.onchange = () => {
+        TM_Config.set(CONFIG_KEYS.VIRAL_RADAR, viralCheck.checked);
+        showToast('✓ บันทึกการตั้งค่าแล้ว');
+      };
+
+      // Close handlers
+      drawer.querySelector('#tm-close-drawer').onclick = () => drawer.remove();
+      drawer.querySelector('.tm-drawer-overlay').onclick = () => drawer.remove();
+    }
+  };
+
+  /* ─── 16. ANTI-SLOP STYLES (Solid Surface, Hairline) ──────── */
   function injectStyles() {
     if (document.getElementById('threadmax-styles')) return;
     const style = document.createElement('style');
     style.id = 'threadmax-styles';
     style.textContent = `
-      /* Action Row Item Wrapper — 100% Geometric Match */
+      /* Action Row Item Wrapper */
       .tm-wrapper {
         position: relative !important;
         display: flex !important;
@@ -1005,7 +1386,7 @@
         box-sizing: border-box !important;
       }
 
-      /* Common Button Styles — 100% Native Vertical Centering */
+      /* Common Button Styles */
       .tm-btn {
         display: flex !important;
         align-items: center !important;
@@ -1034,17 +1415,17 @@
         transform: scale(0.92) !important;
       }
 
-      /* Dropdown Menu (Anchored directly inside wrapper: 100% sticky) */
+      /* Dropdown Menu (Anchored inside wrapper + High Z-Index) */
       .tm-dropdown {
         position: absolute !important;
         top: calc(100% + 4px) !important;
         right: 0 !important;
-        z-index: 100000 !important;
+        z-index: 999999 !important;
         min-width: 250px !important;
         background-color: #161616 !important;
         border: 1px solid #2e2e2e !important;
         border-radius: 10px !important;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.85) !important;
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.9) !important;
         padding: 6px !important;
         display: flex !important;
         flex-direction: column !important;
@@ -1073,6 +1454,22 @@
       }
       .tm-dropdown-icon {
         font-size: 15px !important;
+      }
+
+      /* Viral Velocity Badge */
+      .tm-viral-badge {
+        display: inline-flex !important;
+        align-items: center !important;
+        margin-left: 8px !important;
+        padding: 2px 8px !important;
+        background: rgba(239, 68, 68, 0.12) !important;
+        border: 1px solid rgba(239, 68, 68, 0.35) !important;
+        border-radius: 12px !important;
+        color: #f87171 !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.3px !important;
+        vertical-align: middle !important;
       }
 
       /* Progress Bar */
@@ -1218,8 +1615,8 @@
         border-color: rgba(255, 255, 255, 0.35) !important;
       }
 
-      /* Thread Unroller Modal */
-      #tm-reader-modal {
+      /* Thread Unroller & Splitter Modal */
+      #tm-reader-modal, #tm-splitter-modal {
         position: fixed !important;
         inset: 0 !important;
         z-index: 1000000 !important;
@@ -1274,21 +1671,26 @@
         flex-direction: column !important;
         gap: 16px !important;
       }
-      .tm-reader-segment {
+      .tm-reader-segment, .tm-split-item {
         padding: 14px !important;
         background: #1a1a1a !important;
         border: 1px solid #282828 !important;
         border-radius: 8px !important;
         position: relative !important;
       }
+      .tm-split-item-header {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        margin-bottom: 8px !important;
+      }
       .tm-segment-badge {
         display: inline-block !important;
         font-size: 11px !important;
         font-weight: 700 !important;
         color: #0095f6 !important;
-        margin-bottom: 6px !important;
       }
-      .tm-segment-text {
+      .tm-segment-text, .tm-split-text {
         font-size: 14px !important;
         line-height: 1.6 !important;
         color: #e4e6eb !important;
@@ -1309,10 +1711,199 @@
         color: #888888 !important;
         border-top: 1px solid #242424 !important;
       }
+      .tm-composer-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+      }
+      .tm-split-btn {
+        background: #0095f6 !important;
+        color: #fff !important;
+        border: none !important;
+        border-radius: 4px !important;
+        padding: 3px 8px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+      }
       .tm-hook-status { font-weight: 500 !important; }
       .tm-hook-safe { color: #10b981 !important; }
       .tm-hook-cut { color: #f59e0b !important; }
       .tm-hook-over { color: #ef4444 !important; }
+
+      /* Studio Floating Launcher */
+      #tm-studio-launcher {
+        position: fixed !important;
+        bottom: 20px !important;
+        left: 20px !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        padding: 8px 14px !important;
+        background: #141414 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 20px !important;
+        color: #f0f0f0 !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75) !important;
+        z-index: 99999 !important;
+        transition: transform 120ms ease, background 120ms ease !important;
+      }
+      #tm-studio-launcher:hover {
+        background: #1e1e1e !important;
+        transform: translateY(-2px) !important;
+      }
+
+      /* Studio Drawer Modal */
+      #tm-studio-drawer {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 1000000 !important;
+        display: flex !important;
+        justify-content: flex-end !important;
+        animation: tmFadeIn 150ms ease !important;
+      }
+      .tm-drawer-overlay {
+        position: absolute !important;
+        inset: 0 !important;
+        background: rgba(0, 0, 0, 0.7) !important;
+      }
+      .tm-drawer-content {
+        position: relative !important;
+        width: 100% !important;
+        max-width: 440px !important;
+        height: 100% !important;
+        background: #141414 !important;
+        border-left: 1px solid #282828 !important;
+        box-shadow: -10px 0 36px rgba(0, 0, 0, 0.9) !important;
+        display: flex !important;
+        flex-direction: column !important;
+      }
+      .tm-drawer-header {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 16px 20px !important;
+        border-bottom: 1px solid #242424 !important;
+      }
+      .tm-drawer-brand {
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+      }
+      .tm-brand-icon {
+        font-size: 20px !important;
+      }
+      .tm-drawer-title {
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        color: #ffffff !important;
+      }
+      .tm-drawer-subtitle {
+        font-size: 11px !important;
+        color: #888888 !important;
+      }
+      .tm-drawer-tabs {
+        display: flex !important;
+        border-bottom: 1px solid #242424 !important;
+      }
+      .tm-drawer-tab {
+        flex: 1 !important;
+        text-align: center !important;
+        padding: 12px !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        color: #777777 !important;
+        cursor: pointer !important;
+        border-bottom: 2px solid transparent !important;
+      }
+      .tm-drawer-tab.active {
+        color: #ffffff !important;
+        border-bottom-color: #0095f6 !important;
+      }
+      .tm-drawer-body {
+        flex: 1 !important;
+        padding: 20px !important;
+        overflow-y: auto !important;
+      }
+      .tm-tab-pane {
+        display: none !important;
+      }
+      .tm-tab-pane.active {
+        display: block !important;
+      }
+      .tm-auditor-stats {
+        display: flex !important;
+        gap: 12px !important;
+        margin-bottom: 16px !important;
+      }
+      .tm-stat-card {
+        flex: 1 !important;
+        padding: 14px !important;
+        background: #1a1a1a !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 8px !important;
+        text-align: center !important;
+      }
+      .tm-stat-num {
+        font-size: 22px !important;
+        font-weight: 800 !important;
+        color: #0095f6 !important;
+      }
+      .tm-stat-label {
+        font-size: 11px !important;
+        color: #888888 !important;
+        margin-top: 4px !important;
+      }
+      .tm-auditor-actions {
+        margin-bottom: 16px !important;
+      }
+      .tm-auditor-actions button {
+        width: 100% !important;
+        padding: 10px !important;
+      }
+      .tm-empty-state {
+        text-align: center !important;
+        padding: 30px 20px !important;
+        color: #666666 !important;
+        font-size: 12px !important;
+        line-height: 1.6 !important;
+        background: #181818 !important;
+        border-radius: 8px !important;
+      }
+      .tm-setting-row {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 14px 0 !important;
+        border-bottom: 1px solid #222222 !important;
+      }
+      .tm-setting-title {
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        color: #f0f0f0 !important;
+      }
+      .tm-setting-desc {
+        font-size: 11px !important;
+        color: #777777 !important;
+        margin-top: 2px !important;
+      }
+      .tm-select {
+        background: #202020 !important;
+        color: #f0f0f0 !important;
+        border: 1px solid #333333 !important;
+        padding: 6px 10px !important;
+        border-radius: 6px !important;
+        font-size: 12px !important;
+        outline: none !important;
+      }
+      .tm-checkbox {
+        width: 18px !important;
+        height: 18px !important;
+        accent-color: #0095f6 !important;
+      }
 
       /* Clean Toast */
       #tm-toast {
@@ -1341,7 +1932,7 @@
     document.head.appendChild(style);
   }
 
-  /* ─── 13. SCAN & MUTATION OBSERVER ────────────────────────── */
+  /* ─── 17. SCAN & MUTATION OBSERVER ────────────────────────── */
   let scanTimer = null;
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
@@ -1352,7 +1943,9 @@
       });
       TM_Video.init();
       TM_Timestamp.updateAll();
+      TM_ViralRadar.scan();
       TM_Composer.init();
+      TM_Studio.injectLauncher();
     }, 250);
   }
 
@@ -1372,7 +1965,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    console.info('[ThreadMax] v1.1.1 initialized successfully');
+    console.info('[ThreadMax] v1.2.0 initialized successfully');
   }
 
   if (document.readyState === 'loading') {

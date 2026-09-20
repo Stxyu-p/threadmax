@@ -1,6 +1,7 @@
 /**
  * ThreadMax Unit & Regression Tests (Zero-Dependency CJS)
- * Verifies ZIP32 integrity, URL sanitization, timestamp formatting, Unroller Markdown, and Composer rules.
+ * Verifies ZIP32 integrity, URL sanitization, timestamp formatting, Unroller Markdown,
+ * Composer rules, Thread Splitter, and Viral Velocity calculation.
  */
 
 const assert = require('assert');
@@ -41,6 +42,7 @@ function createStoredZipBuffer(files) {
     let dataBytes;
     if (file.data instanceof Uint8Array) dataBytes = file.data;
     else if (typeof file.data === 'string') dataBytes = encoder.encode(file.data);
+    else if (file.data instanceof ArrayBuffer) dataBytes = new Uint8Array(file.data);
     else dataBytes = new Uint8Array(file.data || 0);
 
     const crc = crc32Bytes(dataBytes);
@@ -151,8 +153,56 @@ function evaluateComposerHook(length) {
   return 'over';
 }
 
+// ─── 6. THREAD SPLITTER LOGIC ───
+function splitText(text, maxLen = 460) {
+  if (!text || text.length <= maxLen) return [text];
+  const paragraphs = text.split(/\n\s*\n/);
+  const chunks = [];
+  let current = '';
+
+  for (const p of paragraphs) {
+    if ((current + (current ? '\n\n' : '') + p).length <= maxLen) {
+      current = current + (current ? '\n\n' : '') + p;
+    } else {
+      if (current) {
+        chunks.push(current);
+        current = '';
+      }
+      if (p.length <= maxLen) {
+        current = p;
+      } else {
+        const sentences = p.split(/(?<=[.!?\n])\s+/);
+        for (const s of sentences) {
+          if ((current + (current ? ' ' : '') + s).length <= maxLen) {
+            current = current + (current ? ' ' : '') + s;
+          } else {
+            if (current) chunks.push(current);
+            current = s;
+          }
+        }
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+// ─── 7. VIRAL VELOCITY LOGIC ───
+function calculateVelocity(replies, reposts, ageMinutes) {
+  const safeAge = Math.max(1, ageMinutes);
+  return (replies * 2 + reposts * 1.5) / safeAge;
+}
+
+function parseMetricNumber(str) {
+  if (!str) return 0;
+  const s = String(str).trim().toLowerCase();
+  if (s.endsWith('k')) return parseFloat(s) * 1000;
+  if (s.endsWith('m')) return parseFloat(s) * 1000000;
+  return parseInt(s, 10) || 0;
+}
+
 // ─── EXECUTE TESTS ───
-console.log('🧪 Running ThreadMax v1.1.0 Test Suite...\n');
+console.log('🧪 Running ThreadMax v1.2.0 Test Suite...\n');
 
 // Test 1: CRC32 known vectors
 const sample1 = Buffer.from('123456789');
@@ -221,4 +271,23 @@ assert.strictEqual(evaluateComposerHook(181), 'cut', 'Hook > 180 should warn cut
 assert.strictEqual(evaluateComposerHook(501), 'over', 'Hook > 500 should warn length');
 console.log('✓ Test 7: Composer Hook fold threshold verified (180 char cutoff)');
 
-console.log('\n🎉 ALL 7 THREADMAX TESTS PASSED GREEN!\n');
+// Test 8: One-Click Thread Splitter (Sentence and Paragraph boundaries)
+const longPost = 'Paragraph 1 is very informative and sets the stage for our entire discussion.\n\n' +
+  'Paragraph 2 elaborates with detailed technical steps, covering architectural invariants and safety bounds. '.repeat(5) +
+  '\n\nParagraph 3 wraps up everything with key takeaways.';
+const splitChunks = splitText(longPost, 300);
+assert(splitChunks.length >= 3, 'Splitter should chunk long text into 3+ parts');
+for (const c of splitChunks) {
+  assert(c.length <= 350, `Chunk length exceeds tolerance: ${c.length}`);
+}
+console.log(`✓ Test 8: One-Click Thread Splitter correctly split long text into ${splitChunks.length} chunks`);
+
+// Test 9: Viral Velocity Score & Metric Parsing
+const v1 = calculateVelocity(20, 10, 30); // 20 replies, 10 reposts in 30 mins -> (40 + 15)/30 = 1.83
+assert(Math.abs(v1 - 1.833) < 0.01, 'Velocity score mismatch');
+assert.strictEqual(parseMetricNumber('1.2k'), 1200, 'Metric 1.2k failed');
+assert.strictEqual(parseMetricNumber('2.5m'), 2500000, 'Metric 2.5m failed');
+assert.strictEqual(parseMetricNumber('42'), 42, 'Metric 42 failed');
+console.log('✓ Test 9: Viral Velocity Radar formula & Metric parser verified');
+
+console.log('\n🎉 ALL 9 THREADMAX v1.2.0 TESTS PASSED GREEN!\n');

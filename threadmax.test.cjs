@@ -1,6 +1,6 @@
 /**
  * ThreadMax Unit & Regression Tests (Zero-Dependency CJS)
- * Verifies ZIP32 integrity, URL sanitization, timestamp formatting, and storage contracts.
+ * Verifies ZIP32 integrity, URL sanitization, timestamp formatting, Unroller Markdown, and Composer rules.
  */
 
 const assert = require('assert');
@@ -116,7 +116,7 @@ function cleanPostUrl(url) {
     }
     return `${u.origin}${u.pathname}`;
   } catch (e) {
-    return url.split('?')[0];
+    return (url || '').split('?')[0];
   }
 }
 
@@ -136,8 +136,23 @@ function formatHybrid(orig, d) {
   return `${orig} (${hours}:${mins})`;
 }
 
+// ─── 4. UNROLLER MARKDOWN FORMATTER ───
+function buildUnrolledMarkdown(author, postId, posts) {
+  const header = `# Thread by @${author}\n\nURL: https://www.threads.com/@${author}/post/${postId}\n\n---\n\n`;
+  const body = posts.map((p, i) => `### [${i + 1}/${posts.length}]\n\n${p.text}\n`).join('\n---\n\n');
+  return header + body;
+}
+
+// ─── 5. COMPOSER HOOK CLASSIFIER ───
+function evaluateComposerHook(length) {
+  if (length === 0) return 'empty';
+  if (length <= 180) return 'safe';
+  if (length <= 500) return 'cut';
+  return 'over';
+}
+
 // ─── EXECUTE TESTS ───
-console.log('🧪 Running ThreadMax Phase 1 Test Suite...\n');
+console.log('🧪 Running ThreadMax v1.1.0 Test Suite...\n');
 
 // Test 1: CRC32 known vectors
 const sample1 = Buffer.from('123456789');
@@ -152,15 +167,8 @@ const mockFiles = [
 ];
 const zipBuffer = createStoredZipBuffer(mockFiles);
 assert(zipBuffer.length > 50, 'ZIP buffer too small');
-
-// Check Local File Header signature (0x04034b50)
 assert.strictEqual(zipBuffer.readUInt32LE(0), 0x04034b50, 'Invalid LFH magic number');
-
-// Check End of Central Directory signature (0x06054b50) at the end
-const eocdSig = zipBuffer.readUInt32LE(zipBuffer.length - 22);
-assert.strictEqual(eocdSig, 0x06054b50, 'Invalid EOCD magic number');
-
-// Check total entries recorded in EOCD
+assert.strictEqual(zipBuffer.readUInt32LE(zipBuffer.length - 22), 0x06054b50, 'Invalid EOCD magic number');
 const totalEntries = zipBuffer.readUInt16LE(zipBuffer.length - 12);
 assert.strictEqual(totalEntries, 2, 'EOCD total entries mismatch');
 console.log('✓ Test 2: ZIP32 buffer generation & magic headers verified');
@@ -181,7 +189,6 @@ console.log('✓ Test 3: Clean Link sanitization strips ?xmt= and tracking param
 const testDate = new Date('2026-09-20T14:30:00');
 const abs = formatAbsolute(testDate);
 assert(abs.includes('20/09/2026') && abs.includes('14:30'), `Absolute timestamp format incorrect: ${abs}`);
-
 const hybrid = formatHybrid('2 ชม.', testDate);
 assert.strictEqual(hybrid, '2 ชม. (14:30)', `Hybrid timestamp incorrect: ${hybrid}`);
 console.log('✓ Test 4: Smart Timestamp (Absolute & Hybrid) verified');
@@ -195,4 +202,23 @@ assert.strictEqual(makeFilename('alice', 'DdfP0AgEzDF', 1, 'image'), 'alice_DdfP
 assert.strictEqual(makeFilename('alice', 'DdfP0AgEzDF', 3, 'video'), 'alice_DdfP0AgEzDF_003.mp4');
 console.log('✓ Test 5: Filename formatting contract verified');
 
-console.log('\n🎉 ALL 5 THREADMAX PHASE 1 TESTS PASSED GREEN!\n');
+// Test 6: Thread Unroller Markdown generator
+const mockThread = [
+  { text: 'Part 1 of the story' },
+  { text: 'Part 2 continuing' },
+  { text: 'Part 3 conclusion' }
+];
+const md = buildUnrolledMarkdown('author_x', 'post_123', mockThread);
+assert(md.includes('# Thread by @author_x'), 'Markdown header missing');
+assert(md.includes('### [1/3]\n\nPart 1 of the story'), 'Part 1 missing');
+assert(md.includes('### [3/3]\n\nPart 3 conclusion'), 'Part 3 missing');
+console.log('✓ Test 6: Thread Unroller Markdown exporter verified');
+
+// Test 7: Composer Hook Guide limits
+assert.strictEqual(evaluateComposerHook(50), 'safe', 'Hook <= 180 should be safe');
+assert.strictEqual(evaluateComposerHook(180), 'safe', 'Hook = 180 should be safe');
+assert.strictEqual(evaluateComposerHook(181), 'cut', 'Hook > 180 should warn cutoff');
+assert.strictEqual(evaluateComposerHook(501), 'over', 'Hook > 500 should warn length');
+console.log('✓ Test 7: Composer Hook fold threshold verified (180 char cutoff)');
+
+console.log('\n🎉 ALL 7 THREADMAX TESTS PASSED GREEN!\n');

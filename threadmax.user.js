@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ThreadMax
 // @namespace    https://github.com/Stxyu-p/threadmax
-// @version      1.0.1
-// @description  Precision Media Downloader, Video Booster, Clean Link & Smart Timestamps for Threads Web
+// @version      1.1.0
+// @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps & Thread Unroller for Threads Web
 // @author       P Choke & MIKA
 // @match        https://www.threads.com/*
 // @match        https://threads.com/*
@@ -18,13 +18,14 @@
 // ==/UserScript==
 
 /**
- * ThreadMax v1.0.1 — Pure Vanilla JavaScript, Zero External Dependencies
+ * ThreadMax v1.1.0 — Pure Vanilla JavaScript, Zero External Dependencies
  * Architecture: Clean Modular / Anti-Slop Minimal Precision
  *
  * ponytail: deliberate simplifications:
  * - Direct SVG path matching (M7.247 1.499) for Share button: 100% language-independent.
+ * - Non-destructive Media Tile overlay: attaches checkboxes to parent DIV without touching <picture> tags.
+ * - Fixed-position floating dropdown tethered via getBoundingClientRect(): zero container clipping.
  * - Stored ZIP (compression level 0): instant client-side packing without memory-heavy deflate.
- * - 250ms debounced scanning: smooth 60fps scrolling without DOM lockups.
  */
 
 (function () {
@@ -130,8 +131,8 @@
       const lfhView = new DataView(lfh.buffer);
       lfhView.setUint32(0, 0x04034b50, true);
       lfhView.setUint16(4, 20, true);
-      lfhView.setUint16(6, 0x0800, true); // UTF-8 filename flag
-      lfhView.setUint16(8, 0, true);      // Stored (no compression)
+      lfhView.setUint16(6, 0x0800, true);
+      lfhView.setUint16(8, 0, true);
       lfhView.setUint16(10, dosTime, true);
       lfhView.setUint16(12, dosDate, true);
       lfhView.setUint32(14, crc, true);
@@ -258,10 +259,8 @@
 
   /* ─── 4. DOM EXTRACTION (POST, MEDIA, ACTIONS) ────────────── */
   const TM_DOM = {
-    // Finds all share buttons across the page (independent of language or DOM nesting)
     findShareButtons: () => {
       const results = [];
-      // 1. Language-independent SVG path matching for Threads Share Paper-Plane
       const sharePaths = Array.from(document.querySelectorAll('path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]'));
       
       sharePaths.forEach(sp => {
@@ -275,7 +274,6 @@
         }
       });
 
-      // 2. Fallback: title/aria-label matching if path ever shifts
       if (results.length === 0) {
         const titleSvgs = Array.from(document.querySelectorAll('svg[title*="Share" i], svg[title*="แชร์"], svg[title*="分享"], svg[aria-label*="Share" i], svg[aria-label*="แชร์"]'));
         titleSvgs.forEach(svg => {
@@ -299,7 +297,6 @@
         }
         curr = curr.parentElement;
       }
-      // Fallback: search upward for container that has a post link
       curr = startNode;
       while (curr && curr !== document.body) {
         if (curr.querySelector?.('a[href*="/post/"]')) {
@@ -372,12 +369,17 @@
         }
       });
 
+      // 3. Post Text Content
+      const textContainer = card.querySelector('div[dir="auto"], span[dir="auto"]');
+      const text = textContainer ? textContainer.innerText.trim() : '';
+
       return {
         card,
         author,
         postId,
         postUrl,
-        media
+        media,
+        text
       };
     }
   };
@@ -403,7 +405,7 @@
         dlBtn.setAttribute('tabindex', '0');
         dlBtn.setAttribute('title', media.length > 1 ? `ThreadMax: ดาวน์โหลดสื่อ (${media.length} ไฟล์)` : 'ThreadMax: ดาวน์โหลดสื่อ');
         dlBtn.innerHTML = `
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
@@ -453,7 +455,32 @@
       });
 
       linkWrapper.appendChild(linkBtn);
-      actionRow.appendChild(linkWrapper);
+      const targetAnchor = actionRow.querySelector('.tm-download-btn')?.parentElement || shareWrapper;
+      actionRow.insertBefore(linkWrapper, targetAnchor.nextSibling);
+
+      // 3. Unroll Thread Button (When on post detail or OP thread)
+      if (window.location.pathname.includes('/post/') && !actionRow.querySelector('.tm-unroll-btn')) {
+        const unrollWrapper = document.createElement('div');
+        unrollWrapper.className = shareWrapper.className || 'tm-wrapper';
+        const unrollBtn = document.createElement('div');
+        unrollBtn.className = 'tm-unroll-btn tm-btn';
+        unrollBtn.setAttribute('role', 'button');
+        unrollBtn.setAttribute('tabindex', '0');
+        unrollBtn.setAttribute('title', 'ThreadMax: รวมเนื้อหาเธรด (Unroll to Reader / Markdown)');
+        unrollBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+        `;
+        unrollBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          TM_Unroller.open(author, postId);
+        });
+        unrollWrapper.appendChild(unrollBtn);
+        actionRow.appendChild(unrollWrapper);
+      }
     },
 
     showCarouselDropdown: (anchorBtn, postData) => {
@@ -486,6 +513,21 @@
       dropdown.appendChild(allItem);
       dropdown.appendChild(selectItem);
 
+      // Fixed positioning tethered to anchor button (Zero container clipping)
+      const rect = anchorBtn.getBoundingClientRect();
+      dropdown.style.position = 'fixed';
+      dropdown.style.top = `${rect.bottom + 8}px`;
+
+      const dropdownWidth = 240;
+      let left = rect.left + (rect.width / 2) - (dropdownWidth / 2);
+      if (left + dropdownWidth > window.innerWidth - 12) {
+        left = window.innerWidth - dropdownWidth - 12;
+      }
+      if (left < 12) left = 12;
+      dropdown.style.left = `${left}px`;
+
+      document.body.appendChild(dropdown);
+
       // Close on outside click
       const onDocClick = (evt) => {
         if (!dropdown.contains(evt.target) && evt.target !== anchorBtn) {
@@ -494,8 +536,6 @@
         }
       };
       setTimeout(() => document.addEventListener('click', onDocClick), 50);
-
-      anchorBtn.parentElement.appendChild(dropdown);
     }
   };
 
@@ -538,7 +578,7 @@
           downloadDirect(item.url, filename);
           completed++;
           TM_Downloader.showProgress(anchorBtn, completed, total);
-          await new Promise(r => setTimeout(r, 220)); // Pacing to prevent browser choking
+          await new Promise(r => setTimeout(r, 220));
         }
         setTimeout(() => TM_Downloader.clearProgress(anchorBtn), 1500);
         showToast(`✓ ดาวน์โหลดเรียบร้อย ${completed}/${total} ไฟล์`);
@@ -596,23 +636,25 @@
     }
   };
 
-  /* ─── 7. INTERACTIVE SELECTION MODE ───────────────────────── */
+  /* ─── 7. INTERACTIVE SELECTION MODE (Non-Destructive) ──────── */
   const TM_Selector = {
     activate: (postData, anchorBtn) => {
       const { card, media, author, postId } = postData;
-      const selectedIndices = new Set(media.map((_, i) => i)); // default select all
+      const selectedIndices = new Set(media.map((_, i) => i));
 
-      // Inject checkboxes
+      // Inject checkboxes on valid parent DIV tiles (NEVER inside <picture>)
       media.forEach((item, index) => {
-        const wrapper = item.element.parentElement;
-        if (!wrapper || wrapper.querySelector('.tm-checkbox-pill')) return;
+        let tile = item.element.parentElement;
+        while (tile && (tile.tagName === 'PICTURE' || tile.tagName === 'A' || tile.offsetWidth === 0)) {
+          tile = tile.parentElement;
+        }
+        if (!tile || tile.querySelector('.tm-checkbox-pill')) return;
 
-        wrapper.style.position = 'relative';
         const pill = document.createElement('div');
         pill.className = 'tm-checkbox-pill active';
         pill.dataset.index = index;
         pill.innerHTML = `
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
         `;
@@ -630,15 +672,20 @@
           TM_Selector.updateBar(card, selectedIndices.size);
         };
 
-        wrapper.appendChild(pill);
+        tile.appendChild(pill);
       });
 
-      // Floating Selection Action Bar
+      // Selection bar placed above action row (Clean native look)
+      const actionRow = card.querySelector('.x78zum5:has(.tm-download-btn)') || card.querySelector('.tm-download-btn')?.closest('.x78zum5');
       let bar = card.querySelector('.tm-select-bar');
       if (!bar) {
         bar = document.createElement('div');
         bar.className = 'tm-select-bar';
-        card.appendChild(bar);
+        if (actionRow && actionRow.parentElement) {
+          actionRow.parentElement.insertBefore(bar, actionRow);
+        } else {
+          card.appendChild(bar);
+        }
       }
 
       TM_Selector.renderBarContent(bar, card, selectedIndices, media, author, postId, anchorBtn);
@@ -815,13 +862,144 @@
     }
   };
 
-  /* ─── 10. ANTI-SLOP STYLES (Solid Surface, Hairline) ──────── */
+  /* ─── 10. THREAD UNROLLER & CLEAN READER (Phase 2) ────────── */
+  const TM_Unroller = {
+    open: (author, postId) => {
+      // Gather all posts by the same author in view
+      const allCards = TM_DOM.findShareButtons().map(s => TM_DOM.findPostCard(s.actionRow));
+      const opPosts = [];
+
+      allCards.forEach(c => {
+        const meta = TM_DOM.getPostMetadata(c);
+        if (meta.author.toLowerCase() === author.toLowerCase() && meta.text.length > 0) {
+          if (!opPosts.some(p => p.text === meta.text)) {
+            opPosts.push(meta);
+          }
+        }
+      });
+
+      if (opPosts.length === 0) {
+        showToast('⚠️ ไม่พบบทสนทนาต่อเนื่องของเจ้าของโพสต์');
+        return;
+      }
+
+      // Build Reader Modal
+      let modal = document.getElementById('tm-reader-modal');
+      if (modal) modal.remove();
+
+      modal = document.createElement('div');
+      modal.id = 'tm-reader-modal';
+      modal.innerHTML = `
+        <div class="tm-reader-overlay"></div>
+        <div class="tm-reader-card">
+          <div class="tm-reader-header">
+            <div>
+              <div class="tm-reader-title">📖 Thread Unroller</div>
+              <div class="tm-reader-author">@${author} • ${opPosts.length} โพสต์ต่อเนื่อง</div>
+            </div>
+            <div class="tm-reader-header-actions">
+              <button type="button" class="tm-btn-primary" id="tm-copy-md">📥 คัดลอก Markdown</button>
+              <button type="button" class="tm-btn-sub" id="tm-close-reader">✕ ปิด</button>
+            </div>
+          </div>
+          <div class="tm-reader-body">
+            ${opPosts.map((p, idx) => `
+              <div class="tm-reader-segment">
+                <div class="tm-segment-badge">${idx + 1}/${opPosts.length}</div>
+                <div class="tm-segment-text">${escapeHtml(p.text).replace(/\\n/g, '<br>')}</div>
+                ${p.media.length > 0 ? `<div class="tm-segment-media-hint">📷 แนบมีเดีย ${p.media.length} รายการ</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Markdown Export
+      modal.querySelector('#tm-copy-md').onclick = () => {
+        const mdText = `# Thread by @${author}\\n\\nURL: https://www.threads.com/@${author}/post/${postId}\\n\\n---\\n\\n` +
+          opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\\n\\n${p.text}\\n`).join('\\n---\\n\\n');
+        navigator.clipboard.writeText(mdText).then(() => {
+          showToast('✓ คัดลอก Markdown ทั้งเธรดแล้ว');
+        });
+      };
+
+      // Close handlers
+      modal.querySelector('#tm-close-reader').onclick = () => modal.remove();
+      modal.querySelector('.tm-reader-overlay').onclick = () => modal.remove();
+      const onEsc = (e) => {
+        if (e.key === 'Escape') {
+          modal.remove();
+          document.removeEventListener('keydown', onEsc);
+        }
+      };
+      document.addEventListener('keydown', onEsc);
+    }
+  };
+
+  function escapeHtml(text) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return String(text).replace(/[&<>"']/g, m => map[m]);
+  }
+
+  /* ─── 11. COMPOSER HOOK GUIDE & AUTO-SPLITTER (Phase 2) ───── */
+  const TM_Composer = {
+    init: () => {
+      const textboxes = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
+      textboxes.forEach(tb => TM_Composer.enhance(tb));
+    },
+
+    enhance: (textbox) => {
+      if (textbox.dataset.tmComposer) return;
+      textbox.dataset.tmComposer = 'true';
+
+      const parent = textbox.closest('form') || textbox.parentElement;
+      if (!parent || parent.querySelector('.tm-composer-bar')) return;
+
+      const bar = document.createElement('div');
+      bar.className = 'tm-composer-bar';
+      bar.innerHTML = `
+        <span class="tm-hook-status"></span>
+        <span class="tm-char-count">0 / 500</span>
+      `;
+      parent.appendChild(bar);
+
+      const countEl = bar.querySelector('.tm-char-count');
+      const hookEl = bar.querySelector('.tm-hook-status');
+
+      const update = () => {
+        const len = textbox.innerText.trim().length;
+        countEl.textContent = `${len} / 500`;
+
+        if (len === 0) {
+          hookEl.textContent = '';
+          hookEl.className = 'tm-hook-status';
+        } else if (len <= 180) {
+          hookEl.textContent = '✨ Hook ปลอดภัย (ไม่ถูกซ่อนบนจอมือถือ)';
+          hookEl.className = 'tm-hook-status tm-hook-safe';
+        } else if (len <= 500) {
+          hookEl.textContent = '📍 เกิน 180 อักษร (จะถูกซ่อนหลัง "...ดูเพิ่มเติม")';
+          hookEl.className = 'tm-hook-status tm-hook-cut';
+        } else {
+          hookEl.textContent = '⚠️ ข้อความยาวเกิน 500 อักษร';
+          hookEl.className = 'tm-hook-status tm-hook-over';
+        }
+      };
+
+      textbox.addEventListener('input', update);
+      textbox.addEventListener('keyup', update);
+      update();
+    }
+  };
+
+  /* ─── 12. ANTI-SLOP STYLES (Solid Surface, Hairline) ──────── */
   function injectStyles() {
     if (document.getElementById('threadmax-styles')) return;
     const style = document.createElement('style');
     style.id = 'threadmax-styles';
     style.textContent = `
-      /* Common Button Styles */
+      /* Common Button Styles — Matching Native Threads Icons */
       .tm-btn {
         display: inline-flex;
         align-items: center;
@@ -829,46 +1007,51 @@
         width: 36px;
         height: 36px;
         border-radius: 50%;
-        color: #777777;
+        color: rgba(243, 245, 247, 0.85);
         cursor: pointer;
-        transition: color 150ms ease, background-color 150ms ease;
+        transition: color 150ms ease, background-color 150ms ease, transform 100ms ease;
         user-select: none;
       }
       .tm-btn:hover {
-        color: #f3f5f7;
-        background-color: rgba(255, 255, 255, 0.08);
+        color: #ffffff;
+        background-color: rgba(255, 255, 255, 0.1);
+      }
+      .tm-btn:active {
+        transform: scale(0.92);
       }
 
-      /* Dropdown Menu (Solid Surface + Hairline) */
+      /* Dropdown Menu (Fixed Positioning + Solid Surface) */
       .tm-dropdown {
-        position: absolute;
-        top: 42px;
-        left: 0;
-        z-index: 10000;
-        min-width: 220px;
-        background-color: #141414;
-        border: 1px solid #282828;
+        z-index: 100000;
+        min-width: 240px;
+        background-color: #161616;
+        border: 1px solid #2e2e2e;
         border-radius: 10px;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75);
         padding: 6px;
         display: flex;
         flex-direction: column;
         gap: 2px;
+        animation: tmFadeIn 120ms ease;
+      }
+      @keyframes tmFadeIn {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
       }
       .tm-dropdown-item {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 9px 12px;
+        padding: 10px 14px;
         border-radius: 6px;
-        color: #e4e6eb;
+        color: #f3f5f7;
         font-size: 13px;
         font-weight: 500;
         cursor: pointer;
         transition: background-color 120ms ease;
       }
       .tm-dropdown-item:hover {
-        background-color: #242424;
+        background-color: #262626;
       }
       .tm-dropdown-icon {
         font-size: 15px;
@@ -886,7 +1069,7 @@
       }
       .tm-progress-text {
         font-size: 11px;
-        color: #999999;
+        color: #aaaaaa;
         font-family: monospace;
       }
       .tm-progress-track {
@@ -903,16 +1086,16 @@
         transition: width 150ms ease;
       }
 
-      /* Checkbox Pill on Media Items */
+      /* Checkbox Pill on Media Items (Safe absolute positioning) */
       .tm-checkbox-pill {
         position: absolute;
         top: 10px;
-        left: 10px;
+        right: 10px;
         width: 26px;
         height: 26px;
         border-radius: 50%;
         background-color: rgba(18, 18, 18, 0.75);
-        border: 1.5px solid #444444;
+        border: 1.5px solid #555555;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -939,7 +1122,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-top: 10px;
+        margin: 8px 0;
         padding: 10px 14px;
         background-color: #161616;
         border: 1px solid #2a2a2a;
@@ -960,6 +1143,7 @@
         font-weight: 600;
         font-size: 12px;
         cursor: pointer;
+        transition: background-color 150ms ease;
       }
       .tm-btn-primary:hover { background-color: #1877f2; }
       .tm-btn-sub {
@@ -970,6 +1154,7 @@
         border-radius: 6px;
         font-size: 12px;
         cursor: pointer;
+        transition: background-color 150ms ease;
       }
       .tm-btn-sub:hover { background-color: #2e2e2e; }
       .tm-btn-cancel {
@@ -1015,6 +1200,102 @@
         border-color: rgba(255, 255, 255, 0.35);
       }
 
+      /* Thread Unroller Modal */
+      #tm-reader-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1000000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: tmFadeIn 150ms ease;
+      }
+      .tm-reader-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.82);
+      }
+      .tm-reader-card {
+        position: relative;
+        width: 90%;
+        max-width: 680px;
+        max-height: 85vh;
+        background: #141414;
+        border: 1px solid #2a2a2a;
+        border-radius: 12px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.9);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .tm-reader-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid #242424;
+      }
+      .tm-reader-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #ffffff;
+      }
+      .tm-reader-author {
+        font-size: 12px;
+        color: #888888;
+        margin-top: 2px;
+      }
+      .tm-reader-header-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .tm-reader-body {
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .tm-reader-segment {
+        padding: 14px;
+        background: #1a1a1a;
+        border: 1px solid #282828;
+        border-radius: 8px;
+        position: relative;
+      }
+      .tm-segment-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        color: #0095f6;
+        margin-bottom: 6px;
+      }
+      .tm-segment-text {
+        font-size: 14px;
+        line-height: 1.6;
+        color: #e4e6eb;
+      }
+      .tm-segment-media-hint {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #777777;
+      }
+
+      /* Composer Bar */
+      .tm-composer-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 12px;
+        font-size: 11px;
+        color: #888888;
+        border-top: 1px solid #242424;
+      }
+      .tm-hook-status { font-weight: 500; }
+      .tm-hook-safe { color: #10b981; }
+      .tm-hook-cut { color: #f59e0b; }
+      .tm-hook-over { color: #ef4444; }
+
       /* Clean Toast */
       #tm-toast {
         position: fixed;
@@ -1032,7 +1313,7 @@
         opacity: 0;
         pointer-events: none;
         transition: transform 200ms ease, opacity 200ms ease;
-        z-index: 999999;
+        z-index: 9999999;
       }
       #tm-toast.tm-toast-visible {
         opacity: 1;
@@ -1042,7 +1323,7 @@
     document.head.appendChild(style);
   }
 
-  /* ─── 11. SCAN & MUTATION OBSERVER ────────────────────────── */
+  /* ─── 13. SCAN & MUTATION OBSERVER ────────────────────────── */
   let scanTimer = null;
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
@@ -1053,6 +1334,7 @@
       });
       TM_Video.init();
       TM_Timestamp.updateAll();
+      TM_Composer.init();
     }, 250);
   }
 
@@ -1072,7 +1354,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    console.info('[ThreadMax] v1.0.1 initialized successfully');
+    console.info('[ThreadMax] v1.1.0 initialized successfully');
   }
 
   if (document.readyState === 'loading') {

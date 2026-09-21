@@ -1671,6 +1671,28 @@
       return Array.from(found);
     },
 
+    extractUsernamesIncremental: (dialog, targetSet) => {
+      if (!dialog) return 0;
+      const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+      let count = 0;
+      for (let i = 0; i < links.length; i++) {
+        const a = links[i];
+        if (a._tmTagged) continue;
+        a._tmTagged = true;
+
+        const href = a.getAttribute('href') || '';
+        const m = href.match(/@([^/?#]+)/);
+        if (m) {
+          const u = m[1].toLowerCase();
+          if (!['post', 'explore', 'search', 'activity', 'messages', 'settings'].includes(u)) {
+            if (targetSet) targetSet.add(u);
+            count++;
+          }
+        }
+      }
+      return count;
+    },
+
     findAllScrollContainers: (dialog) => {
       if (!dialog) return [];
       const containers = new Set();
@@ -1789,6 +1811,7 @@
     autoScrollState: {
       isActive: false,
       timer: null,
+      container: null,
       idleTicks: 0,
       lastCount: 0
     },
@@ -1798,25 +1821,39 @@
       TM_RelationshipAuditor.autoScrollState.isActive = true;
       TM_RelationshipAuditor.autoScrollState.idleTicks = 0;
       TM_RelationshipAuditor.autoScrollState.lastCount = 0;
+      TM_RelationshipAuditor.autoScrollState.container = null;
+
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) {
+        TM_RelationshipAuditor.stopAutoScroll();
+        return;
+      }
+
+      // Pre-resolve and cache scroll container once to eliminate full-DOM querying every tick
+      const initContainers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+      TM_RelationshipAuditor.autoScrollState.container = initContainers[0] || dialog;
 
       const step = () => {
         if (!TM_RelationshipAuditor.autoScrollState.isActive) return;
-        const dialog = document.querySelector('[role="dialog"]');
-        if (!dialog) {
+        const currentDialog = document.querySelector('[role="dialog"]');
+        if (!currentDialog) {
           TM_RelationshipAuditor.stopAutoScroll();
           return;
         }
 
-        const containers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+        let c = TM_RelationshipAuditor.autoScrollState.container;
+        if (!c || !currentDialog.contains(c)) {
+          const fresh = TM_RelationshipAuditor.findAllScrollContainers(currentDialog);
+          c = fresh[0] || currentDialog;
+          TM_RelationshipAuditor.autoScrollState.container = c;
+        }
+
+        const maxScroll = c.scrollHeight - c.clientHeight;
+        const prevTop = c.scrollTop;
+        const stepSize = Math.max(300, Math.min(600, Math.round(c.clientHeight * 0.85)));
+
         let scrolledAny = false;
-
-        for (const c of containers) {
-          const maxScroll = c.scrollHeight - c.clientHeight;
-          if (maxScroll <= 0) continue;
-
-          const prevTop = c.scrollTop;
-          const stepSize = Math.max(300, Math.min(600, Math.round(c.clientHeight * 0.85)));
-
+        if (maxScroll > 0) {
           if (c.scrollTop + stepSize < maxScroll) {
             c.scrollTop += stepSize;
           } else {
@@ -1838,22 +1875,31 @@
         }
 
         // Trigger intersection observers by ensuring any loader/spinner is in view
-        const loaders = dialog.querySelectorAll('[role="progressbar"], svg[aria-label*="Loading"], div[data-visualcompletion="loading-state"]');
+        const loaders = currentDialog.querySelectorAll('[role="progressbar"], svg[aria-label*="Loading"], div[data-visualcompletion="loading-state"]');
         if (loaders.length > 0) {
           try {
             loaders[loaders.length - 1].scrollIntoView({ block: 'end' });
           } catch (_) {}
         }
 
-        const rows = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+        const rows = currentDialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
         const currentCount = rows.length;
 
-        if (currentCount === TM_RelationshipAuditor.autoScrollState.lastCount && !scrolledAny) {
+        // Check if target count has been reached
+        const activeTab = TM_RelationshipAuditor.liveState.activeTab;
+        const targetNumber = activeTab === 'following'
+          ? TM_RelationshipAuditor.liveState.followingTarget
+          : TM_RelationshipAuditor.liveState.followersTarget;
+
+        const isTargetReached = targetNumber > 0 && currentCount >= targetNumber;
+
+        if (isTargetReached || (currentCount === TM_RelationshipAuditor.autoScrollState.lastCount && !scrolledAny)) {
           TM_RelationshipAuditor.autoScrollState.idleTicks++;
-          if (TM_RelationshipAuditor.autoScrollState.idleTicks >= 10) {
+          const maxIdle = isTargetReached ? 3 : 6;
+          if (TM_RelationshipAuditor.autoScrollState.idleTicks >= maxIdle) {
             TM_RelationshipAuditor.stopAutoScroll();
             if (typeof TM_RelationshipAuditor.onAutoScrollComplete === 'function') {
-              TM_RelationshipAuditor.onAutoScrollComplete();
+              TM_RelationshipAuditor.onAutoScrollComplete(currentCount);
             }
             return;
           }
@@ -1865,7 +1911,7 @@
         if (typeof onTick === 'function') onTick();
       };
 
-      TM_RelationshipAuditor.autoScrollState.timer = setInterval(step, 400);
+      TM_RelationshipAuditor.autoScrollState.timer = setInterval(step, 450);
     },
 
     stopAutoScroll: () => {
@@ -1874,6 +1920,7 @@
         clearInterval(TM_RelationshipAuditor.autoScrollState.timer);
         TM_RelationshipAuditor.autoScrollState.timer = null;
       }
+      TM_RelationshipAuditor.autoScrollState.container = null;
     },
 
     toggleAutoScroll: (onTick) => {
@@ -1945,35 +1992,47 @@
         followersTarget,
         followingTarget,
         timer: null,
-        observer: null,
         cleanup: null,
         onUpdate
       };
 
+      let isSniffing = false;
+      let lastFollowersSize = -1;
+      let lastFollowingSize = -1;
+
       const sniff = () => {
-        if (!TM_RelationshipAuditor.liveState.isCapturing) return;
+        if (!TM_RelationshipAuditor.liveState.isCapturing || isSniffing) return;
         const currentDialog = document.querySelector('[role="dialog"]');
         if (!currentDialog) return;
 
-        const currentTabInDOM = TM_RelationshipAuditor.detectActiveTab(currentDialog);
-        if (currentTabInDOM) {
-          TM_RelationshipAuditor.liveState.activeTab = currentTabInDOM;
-        }
+        isSniffing = true;
+        try {
+          // Fast incremental parse: only processes links that haven't been tagged yet!
+          const targetSet = TM_RelationshipAuditor.liveState[TM_RelationshipAuditor.liveState.activeTab];
+          if (targetSet) {
+            TM_RelationshipAuditor.extractUsernamesIncremental(currentDialog, targetSet);
+          }
 
-        const usernames = TM_RelationshipAuditor.extractUsernamesFromDialog(currentDialog);
-        const set = TM_RelationshipAuditor.liveState[TM_RelationshipAuditor.liveState.activeTab];
-        if (set) {
-          usernames.forEach(u => set.add(u));
-        }
+          const curFollowersSize = TM_RelationshipAuditor.liveState.followers.size;
+          const curFollowingSize = TM_RelationshipAuditor.liveState.following.size;
 
-        if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
-          TM_RelationshipAuditor.liveState.onUpdate({
-            followersCount: TM_RelationshipAuditor.liveState.followers.size,
-            followingCount: TM_RelationshipAuditor.liveState.following.size,
-            followersTarget: TM_RelationshipAuditor.liveState.followersTarget,
-            followingTarget: TM_RelationshipAuditor.liveState.followingTarget,
-            activeTab: TM_RelationshipAuditor.liveState.activeTab
-          });
+          // Only fire DOM updates when numbers actually change
+          if (curFollowersSize !== lastFollowersSize || curFollowingSize !== lastFollowingSize) {
+            lastFollowersSize = curFollowersSize;
+            lastFollowingSize = curFollowingSize;
+
+            if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
+              TM_RelationshipAuditor.liveState.onUpdate({
+                followersCount: curFollowersSize,
+                followingCount: curFollowingSize,
+                followersTarget: TM_RelationshipAuditor.liveState.followersTarget,
+                followingTarget: TM_RelationshipAuditor.liveState.followingTarget,
+                activeTab: TM_RelationshipAuditor.liveState.activeTab
+              });
+            }
+          }
+        } finally {
+          isSniffing = false;
         }
       };
 
@@ -1988,24 +2047,27 @@
       };
       dialog.addEventListener('click', handleDialogClick, true);
 
+      // Initial fast sniff
       sniff();
 
-      try {
-        const observer = new MutationObserver(() => sniff());
-        observer.observe(dialog, { childList: true, subtree: true });
-        TM_RelationshipAuditor.liveState.observer = observer;
-      } catch (_) {}
-
-      TM_RelationshipAuditor.liveState.timer = setInterval(sniff, 200);
-
-      const scrollHandler = () => sniff();
+      // Throttled scroll listener via requestAnimationFrame (avoids 60fps synchronous layout thrashing)
+      let rafId = null;
+      const scrollHandler = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          sniff();
+        });
+      };
       dialog.addEventListener('scroll', scrollHandler, { passive: true, capture: true });
-      window.addEventListener('scroll', scrollHandler, { passive: true });
+
+      // Gentle polling interval (350ms) to catch network batch arrivals
+      TM_RelationshipAuditor.liveState.timer = setInterval(sniff, 350);
 
       TM_RelationshipAuditor.liveState.cleanup = () => {
         dialog.removeEventListener('click', handleDialogClick, true);
         dialog.removeEventListener('scroll', scrollHandler, { capture: true });
-        window.removeEventListener('scroll', scrollHandler);
+        if (rafId) cancelAnimationFrame(rafId);
       };
 
       return true;
@@ -2018,10 +2080,18 @@
 
       TM_RelationshipAuditor.liveState.activeTab = tabName;
 
+      // Invalidate tagged anchors so new tab items are recognized
+      dialog.querySelectorAll('a[href*="/@"]').forEach(a => { delete a._tmTagged; });
+
       if (tabName === 'followers' && followersTab) {
         TM_RelationshipAuditor.clickTab(followersTab);
       } else if (tabName === 'following' && followingTab) {
         TM_RelationshipAuditor.clickTab(followingTab);
+      }
+
+      // Clear cached scroll container to ensure auto-scroller re-acquires for new tab
+      if (TM_RelationshipAuditor.autoScrollState) {
+        TM_RelationshipAuditor.autoScrollState.container = null;
       }
 
       if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
@@ -2476,13 +2546,17 @@
           drawer.querySelectorAll('.tm-subtab').forEach(t => t.classList.remove('active'));
           tab.classList.add('active');
           TM_Studio.currentTab = tab.dataset.filter;
+          TM_Studio._listLimit = 50;
           TM_Studio.renderAuditorList(drawer);
         };
       });
 
       // Search input filter
       const searchInput = drawer.querySelector('#tm-auditor-search');
-      searchInput.oninput = () => TM_Studio.renderAuditorList(drawer);
+      searchInput.oninput = () => {
+        TM_Studio._listLimit = 50;
+        TM_Studio.renderAuditorList(drawer);
+      };
 
       // Copy list button
       drawer.querySelector('#tm-copy-auditor-list').onclick = () => {
@@ -2523,9 +2597,11 @@
         }
       };
 
-      TM_RelationshipAuditor.onAutoScrollComplete = () => {
+      TM_RelationshipAuditor.onAutoScrollComplete = (count) => {
         resetAutoScrollUI();
-        showToast('✓ Auto-Scroll completed: reached end of list');
+        const activeTab = TM_RelationshipAuditor.liveState.activeTab;
+        const tabLabel = activeTab === 'following' ? 'Following' : 'Followers';
+        showToast(`✓ Auto-Scroll completed (${(count || 0).toLocaleString()} ${tabLabel} scanned)`);
       };
 
       if (autoScrollBtn) {
@@ -2691,9 +2767,14 @@
         return;
       }
 
+      const PAGE_SIZE = 50;
+      const currentLimit = TM_Studio._listLimit || PAGE_SIZE;
+      const displayUsers = users.slice(0, currentLimit);
+      const hasMore = users.length > currentLimit;
+
       listContainer.innerHTML = `
         <div class="tm-user-rows">
-          ${users.map(u => `
+          ${displayUsers.map(u => `
             <div class="tm-user-row">
               <a class="tm-user-link" href="https://www.threads.net/@${u}" target="_blank" rel="noopener">
                 <span class="tm-user-avatar">👤</span>
@@ -2703,17 +2784,34 @@
             </div>
           `).join('')}
         </div>
+        ${hasMore ? `
+          <div class="tm-list-more-box" style="text-align: center; padding: 12px 0;">
+            <button type="button" class="tm-btn-sub tm-btn-load-more" id="tm-btn-load-more" style="width: 100%; padding: 8px 0; font-weight: 600; cursor: pointer;">
+              Load More (${Math.min(PAGE_SIZE, users.length - currentLimit)} of ${(users.length - currentLimit).toLocaleString()} remaining)
+            </button>
+          </div>
+        ` : ''}
       `;
 
-      listContainer.querySelectorAll('.tm-copy-user-btn').forEach(btn => {
-        btn.onclick = (e) => {
+      // Delegated click handler on container (zero individual listener overhead)
+      listContainer.onclick = (e) => {
+        const copyBtn = e.target.closest('.tm-copy-user-btn');
+        if (copyBtn) {
           e.stopPropagation();
-          const u = btn.dataset.user;
+          const u = copyBtn.dataset.user;
           navigator.clipboard.writeText(`@${u}`).then(() => {
             showToast(`✓ Copied @${u}`);
           });
-        };
-      });
+          return;
+        }
+
+        const moreBtn = e.target.closest('#tm-btn-load-more');
+        if (moreBtn) {
+          e.stopPropagation();
+          TM_Studio._listLimit = (TM_Studio._listLimit || PAGE_SIZE) + PAGE_SIZE;
+          TM_Studio.renderAuditorList(drawer);
+        }
+      };
     }
   };
 
@@ -3614,6 +3712,10 @@
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(() => {
+      // Pause heavy background feed scanning when modal live capture is running
+      if (typeof TM_RelationshipAuditor !== 'undefined' && TM_RelationshipAuditor.liveState && TM_RelationshipAuditor.liveState.isCapturing) {
+        return;
+      }
       const shareItems = TM_DOM.findShareButtons();
       shareItems.forEach(shareInfo => {
         TM_Buttons.injectIntoActionRow(shareInfo);

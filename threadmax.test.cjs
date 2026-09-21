@@ -700,7 +700,81 @@ for (let i = 0; i < 10; i++) {
 assert.strictEqual(scroller.isCompleted, true, 'Auto-scroller must complete after 10 idle ticks at bottom');
 console.log('✓ Test 22: Monotonic Auto-Scroller Engine & Completion Guard verified');
 
-console.log('\n🎉 ALL 22 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 21. INCREMENTAL ACCOUNT PARSER & TAGGED SKIP ENGINE ───
+function mockIncrementalParser(links, targetSet) {
+  let added = 0;
+  for (let i = 0; i < links.length; i++) {
+    const a = links[i];
+    if (a._tmTagged) continue;
+    a._tmTagged = true;
+
+    const href = a.href || '';
+    const m = href.match(/@([^/?#]+)/);
+    if (m) {
+      const u = m[1].toLowerCase();
+      if (!['post', 'explore', 'search', 'activity', 'messages', 'settings'].includes(u)) {
+        targetSet.add(u);
+        added++;
+      }
+    }
+  }
+  return added;
+}
+
+const mockTargetSet = new Set();
+const batch1 = [
+  { href: 'https://www.threads.net/@alice' },
+  { href: 'https://www.threads.net/@bob' }
+];
+
+const addedBatch1 = mockIncrementalParser(batch1, mockTargetSet);
+assert.strictEqual(addedBatch1, 2, 'Batch 1 added count mismatch');
+assert.strictEqual(mockTargetSet.size, 2, 'Target set size mismatch');
+
+// Batch 2 with previous tagged items + 1 new item
+const batch2 = [
+  batch1[0],
+  batch1[1],
+  { href: 'https://www.threads.net/@charlie' }
+];
+
+const addedBatch2 = mockIncrementalParser(batch2, mockTargetSet);
+assert.strictEqual(addedBatch2, 1, 'Incremental parser must only process 1 new untagged item');
+assert.strictEqual(mockTargetSet.size, 3, 'Target set must contain exactly 3 items');
+assert.strictEqual(batch2[0]._tmTagged, true, 'Tagged flag must persist');
+console.log('✓ Test 23: Incremental Account Parsing & Tagged Skip Engine verified');
+
+// ─── 22. VIRTUAL PAGINATED LIST & LOAD MORE GENERATOR ───
+function paginateAccounts(accounts, limit = 50) {
+  const display = accounts.slice(0, limit);
+  const remaining = Math.max(0, accounts.length - limit);
+  const hasMore = remaining > 0;
+  return { display, remaining, hasMore };
+}
+
+const largeAccountList = Array.from({ length: 1250 }, (_, i) => `user_${i}`);
+
+// Initial page of 50
+const page1 = paginateAccounts(largeAccountList, 50);
+assert.strictEqual(page1.display.length, 50, 'Page 1 must contain exactly 50 accounts');
+assert.strictEqual(page1.remaining, 1200, 'Page 1 remaining count must be 1,200');
+assert.strictEqual(page1.hasMore, true, 'Page 1 hasMore must be true');
+
+// After clicking Load More (limit = 100)
+const page2 = paginateAccounts(largeAccountList, 100);
+assert.strictEqual(page2.display.length, 100, 'Page 2 must contain exactly 100 accounts');
+assert.strictEqual(page2.remaining, 1150, 'Page 2 remaining count must be 1,150');
+
+// Small list (< 50)
+const smallList = ['alice', 'bob'];
+const pageSmall = paginateAccounts(smallList, 50);
+assert.strictEqual(pageSmall.display.length, 2, 'Small list display length mismatch');
+assert.strictEqual(pageSmall.remaining, 0, 'Small list remaining must be 0');
+assert.strictEqual(pageSmall.hasMore, false, 'Small list hasMore must be false');
+console.log('✓ Test 24: Virtual Paginated List & Load More Generator verified');
+
+console.log('\n🎉 ALL 24 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
 
 
 

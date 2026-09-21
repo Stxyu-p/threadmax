@@ -15,7 +15,7 @@
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
-// @run-at       document-idle
+// @run-at       document-start
 // @license      MIT
 // ==/UserScript==
 

@@ -393,6 +393,7 @@ const userScriptSource = fs.readFileSync(path.join(__dirname, 'threadmax.user.js
 assert(userScriptSource.includes('// @version      1.4.0'), 'Userscript version should be 1.4.0');
 assert(userScriptSource.includes('// @icon         https://www.threads.net/favicon.ico'), 'Userscript missing @icon');
 assert(userScriptSource.includes('// @icon64       https://www.threads.net/favicon.ico'), 'Userscript missing @icon64');
+assert(userScriptSource.includes('// @run-at       document-start'), 'Userscript must use @run-at document-start for early sniffer intercept');
 console.log('✓ Test 13: Userscript Metadata Header (@icon, @icon64, @version 1.4.0) verified');
 
 // ─── 12. MULTI-TIER USER ID EXTRACTION LOGIC ───

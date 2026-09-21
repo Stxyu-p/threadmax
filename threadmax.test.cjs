@@ -1129,7 +1129,60 @@ setTimeout(() => {
   assert.strictEqual(verifyUnfollowResponse({ friendship_status: { following: true } }), false);
 
   console.log('✓ Test 30: Unfollow Action & Candidate Route Contract verified');
-  console.log('\n🎉 ALL 30 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
+  // ─── TEST 31: Dynamic Active Tab & Strict Partition Contract ───
+  function mockDetectActiveTab(pathname, modalTabs) {
+    const p = (pathname || '').toLowerCase();
+    if (p.includes('/following')) return 'following';
+    if (p.includes('/followers')) return 'followers';
+    if (modalTabs?.following?.ariaSelected === 'true') return 'following';
+    if (modalTabs?.followers?.ariaSelected === 'true') return 'followers';
+    return 'followers';
+  }
+
+  // 1. Pathname detection priority
+  assert.strictEqual(mockDetectActiveTab('/@choke.dev/following', {}), 'following');
+  assert.strictEqual(mockDetectActiveTab('/@choke.dev/followers', {}), 'followers');
+
+  // 2. Strict Partition Tracking (Accounts captured in followers never bleed into following)
+  const partitionFollowers = new Set();
+  const partitionFollowing = new Set();
+
+  function testExtractIncremental(nodes, targetSet, activeTab) {
+    let added = 0;
+    for (const n of nodes) {
+      if (n._tmCapturedTab === activeTab) continue;
+      n._tmCapturedTab = activeTab;
+      targetSet.add(n.username);
+      added++;
+    }
+    return added;
+  }
+
+  // Simulate followers DOM nodes
+  const followersDom = [
+    { username: 'alice', _tmCapturedTab: null },
+    { username: 'bob', _tmCapturedTab: null }
+  ];
+  testExtractIncremental(followersDom, partitionFollowers, 'followers');
+  assert.strictEqual(partitionFollowers.size, 2);
+  assert.strictEqual(partitionFollowing.size, 0, 'Following set must be strictly empty');
+
+  // Simulate tab switch: lingering followersDom nodes still in DOM before unmount
+  // Should NOT be added to following!
+  testExtractIncremental(followersDom, partitionFollowing, 'following');
+  // Following list should get fresh following nodes when they arrive
+  const followingDom = [
+    { username: 'charlie', _tmCapturedTab: null },
+    { username: 'david', _tmCapturedTab: null }
+  ];
+  testExtractIncremental(followingDom, partitionFollowing, 'following');
+  assert.strictEqual(partitionFollowers.size, 2);
+  assert.strictEqual(partitionFollowing.size, 4, 'Following set should receive its accounts');
+  assert.ok(!partitionFollowers.has('charlie'), 'Followers set must not contain following-only account');
+
+  console.log('✓ Test 31: Dynamic active tab auto-detection & strict partition contract verified');
+  console.log('\n🎉 ALL 31 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 

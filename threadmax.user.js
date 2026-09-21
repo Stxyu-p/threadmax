@@ -1803,14 +1803,14 @@
       return Array.from(found);
     },
 
-    extractUsernamesIncremental: (dialog, targetSet) => {
+    extractUsernamesIncremental: (dialog, targetSet, activeTab = 'followers') => {
       if (!dialog) return 0;
       const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
       let count = 0;
       for (let i = 0; i < links.length; i++) {
         const a = links[i];
-        if (a._tmTagged) continue;
-        a._tmTagged = true;
+        if (a._tmCapturedTab === activeTab) continue;
+        a._tmCapturedTab = activeTab;
 
         const href = a.getAttribute('href') || '';
         const m = href.match(/@([^/?#]+)/);
@@ -1877,59 +1877,63 @@
     clickTab: (el) => {
       if (!el || TM_RelationshipAuditor._isSwitchingTab) return;
       TM_RelationshipAuditor._isSwitchingTab = true;
+
+      const clickable = el.tagName === 'A' ? el : (el.closest('a') || el.closest('button') || el.closest('[role="tab"]') || el.closest('[role="button"]') || el);
+
       try {
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        if (typeof el.click === 'function') {
-          try { el.click(); } catch (_) {}
+        const evtInit = { bubbles: true, cancelable: true, view: window };
+        clickable.dispatchEvent(new PointerEvent('pointerdown', evtInit));
+        clickable.dispatchEvent(new MouseEvent('mousedown', evtInit));
+        clickable.dispatchEvent(new PointerEvent('pointerup', evtInit));
+        clickable.dispatchEvent(new MouseEvent('mouseup', evtInit));
+        clickable.dispatchEvent(new MouseEvent('click', evtInit));
+        if (typeof clickable.click === 'function') {
+          try { clickable.click(); } catch (_) {}
         }
       } catch (_) {}
+
+      if (clickable.tagName === 'A' && clickable.href) {
+        try {
+          const url = new URL(clickable.href);
+          if (window.location.pathname !== url.pathname) {
+            window.history.pushState({}, '', url.pathname);
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }
+        } catch (_) {}
+      }
+
       setTimeout(() => {
         TM_RelationshipAuditor._isSwitchingTab = false;
-      }, 200);
+      }, 250);
     },
 
     findModalTabs: (dialog) => {
       if (!dialog) return { followersTab: null, followingTab: null };
 
-      // Look in header / tablist area first (fast path: < 20 nodes)
-      const tabHeader = dialog.querySelector('[role="tablist"], header') || dialog;
-      const candidates = tabHeader.querySelectorAll('[role="tab"], [role="button"], a, button');
-      let followersTab = null;
-      let followingTab = null;
-
-      const followersRegex = /(^ผู้ติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?ผู้ติดตาม$|^followers(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?followers$)/i;
-      const followingRegex = /(^กำลังติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?กำลังติดตาม$|^following(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?following$)/i;
-
-      for (let i = 0; i < candidates.length; i++) {
-        const el = candidates[i];
-        const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
-        if (text.length > 50) continue;
-        if (!followersTab && followersRegex.test(text)) {
-          followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
-        }
-        if (!followingTab && followingRegex.test(text)) {
-          followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
-        }
-        if (followersTab && followingTab) return { followersTab, followingTab };
+      // Strategy 1: Look for exact anchor tags with /followers and /following in href (Universal / Language-agnostic)
+      let followersTab = dialog.querySelector('a[href*="/followers"], a[href$="followers"]');
+      let followingTab = dialog.querySelector('a[href*="/following"], a[href$="following"]');
+      if (followersTab && followingTab) {
+        return { followersTab, followingTab };
       }
 
-      // Fallback only if not found in tablist/header (narrow selector, stop early)
-      if (!followersTab || !followingTab) {
-        const fallbackElements = dialog.querySelectorAll('[role="tab"], a, button');
-        for (let i = 0; i < fallbackElements.length; i++) {
-          const el = fallbackElements[i];
-          const text = (el.textContent || '').trim();
-          if (text.length > 50) continue;
-          if (!followersTab && (followersRegex.test(text) || text.includes('ผู้ติดตาม') || text.toLowerCase().includes('followers'))) {
-            followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
-          }
-          if (!followingTab && (followingRegex.test(text) || text.includes('กำลังติดตาม') || text.toLowerCase().includes('following'))) {
-            followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
-          }
-          if (followersTab && followingTab) break;
+      // Strategy 2: Look across interactive tab elements for semantic keywords in Thai and English
+      const candidates = dialog.querySelectorAll('[role="tab"], [role="button"], a, button, div');
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
+        const text = (el.textContent || '').trim().toLowerCase();
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        const href = (el.getAttribute('href') || '').toLowerCase();
+        const combined = `${text} ${aria} ${href}`;
+        if (combined.length > 80) continue;
+
+        if (!followersTab && (combined.includes('ผู้ติดตาม') || combined.includes('follower') || href.includes('follower'))) {
+          followersTab = el.closest('a, button, [role="tab"], [role="button"]') || el;
         }
+        if (!followingTab && (combined.includes('กำลังติดตาม') || combined.includes('following') || href.includes('following'))) {
+          followingTab = el.closest('a, button, [role="tab"], [role="button"]') || el;
+        }
+        if (followersTab && followingTab) break;
       }
 
       return { followersTab, followingTab };
@@ -2090,18 +2094,23 @@
     },
 
     detectActiveTab: (dialog) => {
+      // 1. Authoritative URL path check (Threads Web routes to /@username/followers or /@username/following)
+      const path = (window.location.pathname || '').toLowerCase();
+      if (path.includes('/following')) return 'following';
+      if (path.includes('/followers')) return 'followers';
+
       if (!dialog) return null;
       const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
 
+      // 2. Check aria-selected on detected tabs
       if (followingTab) {
-        if (followingTab.getAttribute('aria-selected') === 'true') return 'following';
-        if (followingTab.querySelector('[aria-selected="true"]')) return 'following';
+        if (followingTab.getAttribute('aria-selected') === 'true' || followingTab.querySelector('[aria-selected="true"]')) return 'following';
       }
       if (followersTab) {
-        if (followersTab.getAttribute('aria-selected') === 'true') return 'followers';
-        if (followersTab.querySelector('[aria-selected="true"]')) return 'followers';
+        if (followersTab.getAttribute('aria-selected') === 'true' || followersTab.querySelector('[aria-selected="true"]')) return 'followers';
       }
 
+      // 3. Check visual weight / underline styles
       try {
         const getWeight = (el) => {
           if (!el) return 0;
@@ -2163,10 +2172,19 @@
 
         isSniffing = true;
         try {
-          // Fast incremental parse: only processes links that haven't been tagged yet!
-          const targetSet = TM_RelationshipAuditor.liveState[TM_RelationshipAuditor.liveState.activeTab];
+          // Dynamic Active Tab Detection on every tick!
+          // Detects manual user clicks in Threads or URL route changes instantly
+          const realActiveTab = TM_RelationshipAuditor.detectActiveTab(currentDialog);
+          if (realActiveTab && realActiveTab !== TM_RelationshipAuditor.liveState.activeTab) {
+            TM_RelationshipAuditor.switchLiveTab(realActiveTab, false);
+            return;
+          }
+
+          // Sniff ONLY into the confirmed activeTab
+          const currentTab = TM_RelationshipAuditor.liveState.activeTab;
+          const targetSet = TM_RelationshipAuditor.liveState[currentTab];
           if (targetSet) {
-            TM_RelationshipAuditor.extractUsernamesIncremental(currentDialog, targetSet);
+            TM_RelationshipAuditor.extractUsernamesIncremental(currentDialog, targetSet, currentTab);
           }
 
           const curFollowersSize = TM_RelationshipAuditor.liveState.followers.size;
@@ -2195,12 +2213,18 @@
       // Click delegation on Threads modal tabs
       const handleDialogClick = (e) => {
         if (TM_RelationshipAuditor._isSwitchingTab) return;
-        const { followersTab: fTab, followingTab: gTab } = TM_RelationshipAuditor.findModalTabs(dialog);
-        if (gTab && (gTab === e.target || gTab.contains(e.target))) {
+        const target = e.target;
+        if (!target) return;
+
+        const followingLink = target.closest('a[href*="/following"]');
+        const followersLink = target.closest('a[href*="/followers"]');
+        const text = (target.textContent || '').toLowerCase();
+
+        if (followingLink || text.includes('กำลังติดตาม') || text.includes('following')) {
           if (TM_RelationshipAuditor.liveState.activeTab !== 'following') {
             TM_RelationshipAuditor.switchLiveTab('following', false);
           }
-        } else if (fTab && (fTab === e.target || fTab.contains(e.target))) {
+        } else if (followersLink || text.includes('ผู้ติดตาม') || text.includes('followers')) {
           if (TM_RelationshipAuditor.liveState.activeTab !== 'followers') {
             TM_RelationshipAuditor.switchLiveTab('followers', false);
           }
@@ -2208,10 +2232,21 @@
       };
       dialog.addEventListener('click', handleDialogClick, true);
 
+      // Listen to popstate URL changes
+      const handlePopState = () => {
+        const curDialog = document.querySelector('[role="dialog"]');
+        if (!curDialog) return;
+        const detected = TM_RelationshipAuditor.detectActiveTab(curDialog);
+        if (detected && detected !== TM_RelationshipAuditor.liveState.activeTab) {
+          TM_RelationshipAuditor.switchLiveTab(detected, false);
+        }
+      };
+      window.addEventListener('popstate', handlePopState);
+
       // Initial fast sniff
       sniff();
 
-      // Throttled scroll listener via requestAnimationFrame (avoids 60fps synchronous layout thrashing)
+      // Throttled scroll listener via requestAnimationFrame
       let rafId = null;
       const scrollHandler = () => {
         if (rafId) return;
@@ -2228,6 +2263,7 @@
       TM_RelationshipAuditor.liveState.cleanup = () => {
         dialog.removeEventListener('click', handleDialogClick, true);
         dialog.removeEventListener('scroll', scrollHandler, { capture: true });
+        window.removeEventListener('popstate', handlePopState);
         if (rafId) cancelAnimationFrame(rafId);
       };
 
@@ -2275,15 +2311,10 @@
         });
       }
 
-      // 6. After brief grace period for Threads React DOM to mount new tab's list,
-      // invalidate tagged flags on new nodes and unblock sniffing
+      // 6. Safe transition delay (600ms) for Threads React to mount new tab's list
       setTimeout(() => {
-        const curDialog = document.querySelector('[role="dialog"]');
-        if (curDialog) {
-          curDialog.querySelectorAll('a[href*="/@"]').forEach(a => { delete a._tmTagged; });
-        }
         TM_RelationshipAuditor._isTabTransitioning = false;
-      }, 400);
+      }, 600);
     },
 
     stopLiveCapture: () => {

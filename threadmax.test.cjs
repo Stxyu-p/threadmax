@@ -601,7 +601,30 @@ assert.deepStrictEqual(liveResult.diff.fans.sort(), ['bob', 'charlie', 'david', 
 assert.deepStrictEqual(liveResult.diff.notFollowingBack, ['frank'], 'NotFollowingBack mismatch in live capture');
 console.log('✓ Test 19: Human-Assist Live Capture Accumulator & Relationship Diff verified');
 
-console.log('\n🎉 ALL 19 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 18. TAB PARTITION GUARD & NON-DESTRUCTIVE WEIGHT DETECTOR ───
+function detectTabFromWeights(f1Weight, f2Weight) {
+  if (f2Weight > f1Weight + 15) return 'following';
+  if (f1Weight > f2Weight + 15) return 'followers';
+  return null; // Non-destructive: must not guess when ambiguous!
+}
+
+// When weights are ambiguous (e.g. 10 vs 12), must return null
+assert.strictEqual(detectTabFromWeights(10, 12), null, 'Ambiguous weight must return null');
+// When followers tab has strong underline & white text (50 vs 10)
+assert.strictEqual(detectTabFromWeights(50, 10), 'followers', 'Followers weight detection failed');
+// When following tab has strong underline & white text (10 vs 60)
+assert.strictEqual(detectTabFromWeights(10, 60), 'following', 'Following weight detection failed');
+
+// State guard check: activeTab must never reset to followers if detector returns null
+let currentActiveTab = 'following';
+const detected = detectTabFromWeights(20, 20); // Ambiguous in DOM
+if (detected) {
+  currentActiveTab = detected;
+}
+assert.strictEqual(currentActiveTab, 'following', 'State guard failed: activeTab was erroneously reset');
+console.log('✓ Test 20: Tab Partition Guard & Non-destructive Weight Detector verified');
+
+console.log('\n🎉 ALL 20 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 
 
 

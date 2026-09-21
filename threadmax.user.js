@@ -1756,25 +1756,100 @@
       followingTarget: 0,
       timer: null,
       observer: null,
-      cleanup: null
+      cleanup: null,
+      onUpdate: null
+    },
+
+    autoScrollState: {
+      isActive: false,
+      timer: null
+    },
+
+    startAutoScroll: (onTick) => {
+      if (TM_RelationshipAuditor.autoScrollState.isActive) return;
+      TM_RelationshipAuditor.autoScrollState.isActive = true;
+
+      const step = () => {
+        if (!TM_RelationshipAuditor.autoScrollState.isActive) return;
+        const dialog = document.querySelector('[role="dialog"]');
+        if (!dialog) {
+          TM_RelationshipAuditor.stopAutoScroll();
+          return;
+        }
+
+        const containers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+        for (const c of containers) {
+          c.scrollBy({ top: 380, behavior: 'smooth' });
+          c.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+
+        const rows = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+        if (rows.length > 0) {
+          try {
+            rows[rows.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
+          } catch (_) {}
+        }
+
+        if (typeof onTick === 'function') onTick();
+      };
+
+      TM_RelationshipAuditor.autoScrollState.timer = setInterval(step, 300);
+    },
+
+    stopAutoScroll: () => {
+      TM_RelationshipAuditor.autoScrollState.isActive = false;
+      if (TM_RelationshipAuditor.autoScrollState.timer) {
+        clearInterval(TM_RelationshipAuditor.autoScrollState.timer);
+        TM_RelationshipAuditor.autoScrollState.timer = null;
+      }
+    },
+
+    toggleAutoScroll: (onTick) => {
+      if (TM_RelationshipAuditor.autoScrollState.isActive) {
+        TM_RelationshipAuditor.stopAutoScroll();
+        return false;
+      } else {
+        TM_RelationshipAuditor.startAutoScroll(onTick);
+        return true;
+      }
     },
 
     detectActiveTab: (dialog) => {
-      if (!dialog) return 'followers';
+      if (!dialog) return null;
       const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
 
       if (followingTab) {
         if (followingTab.getAttribute('aria-selected') === 'true') return 'following';
         if (followingTab.querySelector('[aria-selected="true"]')) return 'following';
-        if (followingTab.getAttribute('tabindex') === '0' && followersTab && followersTab.getAttribute('tabindex') === '-1') return 'following';
       }
       if (followersTab) {
         if (followersTab.getAttribute('aria-selected') === 'true') return 'followers';
         if (followersTab.querySelector('[aria-selected="true"]')) return 'followers';
-        if (followersTab.getAttribute('tabindex') === '0' && followingTab && followingTab.getAttribute('tabindex') === '-1') return 'followers';
       }
 
-      return 'followers';
+      try {
+        const getWeight = (el) => {
+          if (!el) return 0;
+          let w = 0;
+          const style = window.getComputedStyle(el);
+          if (parseFloat(style.borderBottomWidth) > 0 && style.borderBottomStyle !== 'none') w += 30;
+          const m = (style.color || '').match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (m) {
+            const brightness = (parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3])) / 3;
+            if (brightness > 200) w += 20;
+            else if (brightness < 160) w -= 10;
+          }
+          if (el.querySelector('div[style*="height: 2px"], div[style*="bottom: 0"]')) w += 40;
+          return w;
+        };
+
+        const f1w = getWeight(followersTab);
+        const f2w = getWeight(followingTab);
+        if (f2w > f1w + 15) return 'following';
+        if (f1w > f2w + 15) return 'followers';
+      } catch (_) {}
+
+      return null;
     },
 
     startLiveCapture: (targetUsername, onUpdate) => {
@@ -1787,17 +1862,20 @@
 
       TM_RelationshipAuditor.stopLiveCapture();
 
+      const initialTab = TM_RelationshipAuditor.detectActiveTab(dialog) || 'followers';
+
       TM_RelationshipAuditor.liveState = {
         isCapturing: true,
         targetUsername: targetUsername || 'user',
-        activeTab: TM_RelationshipAuditor.detectActiveTab(dialog),
+        activeTab: initialTab,
         followers: new Set(),
         following: new Set(),
         followersTarget,
         followingTarget,
         timer: null,
         observer: null,
-        cleanup: null
+        cleanup: null,
+        onUpdate
       };
 
       const sniff = () => {
@@ -1816,8 +1894,8 @@
           usernames.forEach(u => set.add(u));
         }
 
-        if (typeof onUpdate === 'function') {
-          onUpdate({
+        if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
+          TM_RelationshipAuditor.liveState.onUpdate({
             followersCount: TM_RelationshipAuditor.liveState.followers.size,
             followingCount: TM_RelationshipAuditor.liveState.following.size,
             followersTarget: TM_RelationshipAuditor.liveState.followersTarget,
@@ -1827,18 +1905,16 @@
         }
       };
 
-      if (followersTab) {
-        followersTab.addEventListener('click', () => {
-          TM_RelationshipAuditor.liveState.activeTab = 'followers';
-          setTimeout(sniff, 150);
-        });
-      }
-      if (followingTab) {
-        followingTab.addEventListener('click', () => {
-          TM_RelationshipAuditor.liveState.activeTab = 'following';
-          setTimeout(sniff, 150);
-        });
-      }
+      // Click delegation on Threads modal tabs
+      const handleDialogClick = (e) => {
+        const { followersTab: fTab, followingTab: gTab } = TM_RelationshipAuditor.findModalTabs(dialog);
+        if (gTab && (gTab === e.target || gTab.contains(e.target))) {
+          TM_RelationshipAuditor.switchLiveTab('following');
+        } else if (fTab && (fTab === e.target || fTab.contains(e.target))) {
+          TM_RelationshipAuditor.switchLiveTab('followers');
+        }
+      };
+      dialog.addEventListener('click', handleDialogClick, true);
 
       sniff();
 
@@ -1853,7 +1929,9 @@
       const scrollHandler = () => sniff();
       dialog.addEventListener('scroll', scrollHandler, { passive: true, capture: true });
       window.addEventListener('scroll', scrollHandler, { passive: true });
+
       TM_RelationshipAuditor.liveState.cleanup = () => {
+        dialog.removeEventListener('click', handleDialogClick, true);
         dialog.removeEventListener('scroll', scrollHandler, { capture: true });
         window.removeEventListener('scroll', scrollHandler);
       };
@@ -1865,16 +1943,28 @@
       const dialog = document.querySelector('[role="dialog"]');
       if (!dialog) return;
       const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
+
+      TM_RelationshipAuditor.liveState.activeTab = tabName;
+
       if (tabName === 'followers' && followersTab) {
         TM_RelationshipAuditor.clickTab(followersTab);
-        TM_RelationshipAuditor.liveState.activeTab = 'followers';
       } else if (tabName === 'following' && followingTab) {
         TM_RelationshipAuditor.clickTab(followingTab);
-        TM_RelationshipAuditor.liveState.activeTab = 'following';
+      }
+
+      if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
+        TM_RelationshipAuditor.liveState.onUpdate({
+          followersCount: TM_RelationshipAuditor.liveState.followers.size,
+          followingCount: TM_RelationshipAuditor.liveState.following.size,
+          followersTarget: TM_RelationshipAuditor.liveState.followersTarget,
+          followingTarget: TM_RelationshipAuditor.liveState.followingTarget,
+          activeTab: TM_RelationshipAuditor.liveState.activeTab
+        });
       }
     },
 
     stopLiveCapture: () => {
+      TM_RelationshipAuditor.stopAutoScroll();
       if (TM_RelationshipAuditor.liveState.timer) {
         clearInterval(TM_RelationshipAuditor.liveState.timer);
         TM_RelationshipAuditor.liveState.timer = null;
@@ -1891,6 +1981,7 @@
     },
 
     finishLiveCapture: async () => {
+      TM_RelationshipAuditor.stopAutoScroll();
       const followers = Array.from(TM_RelationshipAuditor.liveState.followers);
       const following = Array.from(TM_RelationshipAuditor.liveState.following);
       const targetUsername = TM_RelationshipAuditor.liveState.targetUsername || 'user';
@@ -1898,7 +1989,7 @@
       TM_RelationshipAuditor.stopLiveCapture();
 
       if (followers.length === 0 && following.length === 0) {
-        throw new Error('ยังไม่มีรายชื่อที่ถูกดักจับ กรุณาเลื่อนดูรายชื่อในหน้าต่างก่อนกดคำนวณนะคะ');
+        throw new Error('No accounts captured yet. Please scroll the modal to capture accounts before calculating.');
       }
 
       const prevSnapshot = await TM_DB.getLatestSnapshot();
@@ -2105,11 +2196,11 @@
               <div class="tm-auditor-stats">
                 <div class="tm-stat-card" data-category="notback">
                   <div class="tm-stat-num" id="tm-stat-notback">0</div>
-                  <div class="tm-stat-label">ไม่ตามกลับ</div>
+                  <div class="tm-stat-label">Not Following Back</div>
                 </div>
                 <div class="tm-stat-card" data-category="fans">
                   <div class="tm-stat-num" id="tm-stat-fans">0</div>
-                  <div class="tm-stat-label">แฟนคลับ</div>
+                  <div class="tm-stat-label">Fans</div>
                 </div>
                 <div class="tm-stat-card" data-category="mutual">
                   <div class="tm-stat-num" id="tm-stat-mutual">0</div>
@@ -2117,16 +2208,16 @@
                 </div>
                 <div class="tm-stat-card" data-category="lost">
                   <div class="tm-stat-num" id="tm-stat-lost">0</div>
-                  <div class="tm-stat-label">เพิ่งเลิกตาม</div>
+                  <div class="tm-stat-label">Lost</div>
                 </div>
               </div>
 
               <div class="tm-auditor-actions" id="tm-auditor-idle-actions">
                 <button type="button" class="tm-btn-primary tm-btn-pulse" id="tm-start-live-capture">
-                  🟢 เริ่มโหมดดักจับสด (Live Capture)
+                  🟢 Start Live Capture
                 </button>
                 <div class="tm-auditor-hint">
-                  💡 ปลอดภัย 100%: เปิดหน้าต่างผู้ติดตาม แล้วเลื่อนเมาส์ตามปกติ ระบบจะกวาดข้อมูลลงฐานข้อมูลแบบเรียลไทม์
+                  💡 100% Safe & Private: Open your Followers or Following modal on Threads, then start live capture to audit relationships in real time.
                 </div>
               </div>
 
@@ -2135,71 +2226,78 @@
                 <div class="tm-live-header">
                   <div class="tm-live-title">
                     <span class="tm-live-dot"></span>
-                    <span>โหมดดักจับสด (Live Capture)</span>
+                    <span>Live Capture Mode</span>
                   </div>
-                  <span class="tm-live-badge">กำลังบันทึก</span>
+                  <span class="tm-live-badge">● CAPTURING</span>
                 </div>
 
                 <div class="tm-live-guide">
-                  👉 เลื่อนเมาส์บนหน้าต่างรายชื่อ Threads ได้อย่างอิสระ ตัวเลขจะเพิ่มขึ้นแบบเรียลไทม์
+                  👉 Scroll the Threads modal (or use Auto-Scroll). Accounts are captured in real time.
+                </div>
+
+                <div class="tm-live-autoscroll-bar">
+                  <button type="button" class="tm-btn-sub tm-btn-autoscroll" id="tm-btn-autoscroll">
+                    ⚡ Auto-Scroll: Off
+                  </button>
+                  <span class="tm-autoscroll-desc">Glides down automatically to relieve hand fatigue</span>
                 </div>
 
                 <div class="tm-live-cards">
                   <div class="tm-live-card active" id="tm-live-card-followers">
                     <div class="tm-live-card-top">
-                      <span class="tm-live-card-name">👥 ผู้ติดตาม</span>
-                      <span class="tm-live-status-pill active" id="tm-live-pill-followers">กำลังกวาด 🟢</span>
+                      <span class="tm-live-card-name">👥 Followers</span>
+                      <span class="tm-live-status-pill active" id="tm-live-pill-followers">Scanning 🟢</span>
                     </div>
                     <div class="tm-live-card-metric">
                       <span class="tm-live-val" id="tm-live-followers-cnt">0</span>
                       <span class="tm-live-max" id="tm-live-followers-total">/ 0</span>
                     </div>
                     <button type="button" class="tm-btn-sub tm-btn-switch-tab" id="tm-switch-to-followers">
-                      👉 สลับไปแท็บนี้
+                      👉 Switch to Tab
                     </button>
                   </div>
 
                   <div class="tm-live-card" id="tm-live-card-following">
                     <div class="tm-live-card-top">
-                      <span class="tm-live-card-name">👤 กำลังติดตาม</span>
-                      <span class="tm-live-status-pill" id="tm-live-pill-following">รอกวาด ⚪</span>
+                      <span class="tm-live-card-name">👤 Following</span>
+                      <span class="tm-live-status-pill" id="tm-live-pill-following">Waiting ⚪</span>
                     </div>
                     <div class="tm-live-card-metric">
                       <span class="tm-live-val" id="tm-live-following-cnt">0</span>
                       <span class="tm-live-max" id="tm-live-following-total">/ 0</span>
                     </div>
                     <button type="button" class="tm-btn-sub tm-btn-switch-tab" id="tm-switch-to-following">
-                      👉 สลับไปแท็บนี้
+                      👉 Switch to Tab
                     </button>
                   </div>
                 </div>
 
                 <div class="tm-live-actions">
                   <button type="button" class="tm-btn-primary tm-btn-finish" id="tm-live-finish">
-                    ✅ คำนวณและสรุปผลความสัมพันธ์
+                    ✅ Calculate Relationships
                   </button>
                   <button type="button" class="tm-btn-cancel" id="tm-live-cancel">
-                    ⏹️ ยกเลิก
+                    ⏹️ Cancel
                   </button>
                 </div>
               </div>
 
               <div class="tm-auditor-subtabs">
-                <button type="button" class="tm-subtab active" data-filter="notback">ไม่ตามกลับ (<span id="cnt-notback">0</span>)</button>
-                <button type="button" class="tm-subtab" data-filter="fans">แฟนคลับ (<span id="cnt-fans">0</span>)</button>
+                <button type="button" class="tm-subtab active" data-filter="notback">Not Following Back (<span id="cnt-notback">0</span>)</button>
+                <button type="button" class="tm-subtab" data-filter="fans">Fans (<span id="cnt-fans">0</span>)</button>
                 <button type="button" class="tm-subtab" data-filter="mutual">Mutual (<span id="cnt-mutual">0</span>)</button>
                 <button type="button" class="tm-subtab" data-filter="lost">Lost (<span id="cnt-lost">0</span>)</button>
                 <button type="button" class="tm-subtab" data-filter="gained">Gained (<span id="cnt-gained">0</span>)</button>
               </div>
 
               <div class="tm-auditor-toolbar">
-                <input type="text" id="tm-auditor-search" class="tm-search-input" placeholder="🔍 ค้นหาชื่อบัญชี..." />
-                <button type="button" class="tm-btn-sub" id="tm-copy-auditor-list" title="คัดลอกรายชื่อทั้งหมดในมุมมองนี้">📋 คัดลอก</button>
+                <input type="text" id="tm-auditor-search" class="tm-search-input" placeholder="🔍 Search usernames..." />
+                <button type="button" class="tm-btn-sub" id="tm-copy-auditor-list" title="Copy all usernames in current view">📋 Copy List</button>
               </div>
 
               <div class="tm-auditor-list" id="tm-auditor-list">
                 <div class="tm-empty-state">
-                  กดปุ่ม "สแกนความสัมพันธ์ล่าสุด" เพื่อเริ่มต้นตรวจสอบสถานะความสัมพันธ์อย่างปลอดภัย
+                  Click "Start Live Capture" to safely audit your follower relationships.
                 </div>
               </div>
             </div>
@@ -2208,31 +2306,31 @@
             <div class="tm-tab-pane" id="pane-settings">
               <div class="tm-setting-row">
                 <div>
-                  <div class="tm-setting-title">โหมดดาวน์โหลดไฟล์มีเดีย</div>
-                  <div class="tm-setting-desc">รวมไฟล์ในโพสต์เป็น ZIP หรือแยกไฟล์เดี่ยว</div>
+                  <div class="tm-setting-title">Media Download Mode</div>
+                  <div class="tm-setting-desc">Bundle post media into ZIP or save individually</div>
                 </div>
                 <select class="tm-select" id="tm-opt-download">
-                  <option value="zip">รวมเป็น ZIP (.zip)</option>
-                  <option value="individual">แยกทีละไฟล์ (Individual)</option>
+                  <option value="zip">ZIP Archive (.zip)</option>
+                  <option value="individual">Individual Files</option>
                 </select>
               </div>
 
               <div class="tm-setting-row">
                 <div>
-                  <div class="tm-setting-title">รูปแบบการแสดงเวลา (Timestamp)</div>
-                  <div class="tm-setting-desc">เลือกการแสดงผลเวลาของโพสต์ในฟีด</div>
+                  <div class="tm-setting-title">Timestamp Format</div>
+                  <div class="tm-setting-desc">Choose how post creation timestamps are displayed in feed</div>
                 </div>
                 <select class="tm-select" id="tm-opt-timestamp">
-                  <option value="hybrid">Hybrid (เช่น 2 ชม. (14:30))</option>
-                  <option value="absolute">Absolute (วันและเวลาจริง)</option>
-                  <option value="native">Native (แบบดั้งเดิมของ Threads)</option>
+                  <option value="hybrid">Hybrid (e.g. 2h (14:30))</option>
+                  <option value="absolute">Absolute (Date & Time)</option>
+                  <option value="native">Native (Threads original)</option>
                 </select>
               </div>
 
               <div class="tm-setting-row">
                 <div>
                   <div class="tm-setting-title">Viral Velocity Radar</div>
-                  <div class="tm-setting-desc">ติดป้าย ⚡ Rising บนโพสต์ที่กำลังมีอัตราเร่งสูง (< 50 คอมเมนต์)</div>
+                  <div class="tm-setting-desc">Badge ⚡ Rising on fast-growing posts (&lt; 50 comments)</div>
                 </div>
                 <input type="checkbox" id="tm-opt-viral" class="tm-checkbox" />
               </div>
@@ -2240,7 +2338,7 @@
               <div class="tm-setting-row">
                 <div>
                   <div class="tm-setting-title">Rising Radar Feed Filter</div>
-                  <div class="tm-setting-desc">กรองฟีดแสดงเฉพาะโพสต์เรดาร์พุ่งแรง</div>
+                  <div class="tm-setting-desc">Filter feed to display only Rising posts</div>
                 </div>
                 <input type="checkbox" id="tm-opt-filter-rising" class="tm-checkbox" />
               </div>
@@ -2266,7 +2364,7 @@
       dlSelect.value = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
       dlSelect.onchange = () => {
         TM_Config.set(CONFIG_KEYS.DOWNLOAD_MODE, dlSelect.value);
-        showToast('✓ บันทึกการตั้งค่าแล้ว');
+        showToast('✓ Settings saved');
       };
 
       const timeSelect = drawer.querySelector('#tm-opt-timestamp');
@@ -2274,14 +2372,14 @@
       timeSelect.onchange = () => {
         TM_Config.set(CONFIG_KEYS.TIMESTAMP_MODE, timeSelect.value);
         TM_Timestamp.updateAll();
-        showToast('✓ บันทึกการตั้งค่าแล้ว');
+        showToast('✓ Settings saved');
       };
 
       const viralCheck = drawer.querySelector('#tm-opt-viral');
       viralCheck.checked = TM_Config.get(CONFIG_KEYS.VIRAL_RADAR, true);
       viralCheck.onchange = () => {
         TM_Config.set(CONFIG_KEYS.VIRAL_RADAR, viralCheck.checked);
-        showToast('✓ บันทึกการตั้งค่าแล้ว');
+        showToast('✓ Settings saved');
       };
 
       const filterRisingCheck = drawer.querySelector('#tm-opt-filter-rising');
@@ -2290,7 +2388,7 @@
         TM_Config.set(CONFIG_KEYS.FILTER_RISING, filterRisingCheck.checked);
         TM_ViralRadar.updateFilterBarUI();
         TM_ViralRadar.applyFilter();
-        showToast('✓ บันทึกการตั้งค่าแล้ว');
+        showToast('✓ Settings saved');
       };
 
       // Load latest snapshot from IndexedDB
@@ -2318,12 +2416,12 @@
       drawer.querySelector('#tm-copy-auditor-list').onclick = () => {
         const list = TM_Studio.getCurrentFilteredUsers(drawer);
         if (list.length === 0) {
-          showToast('⚠️ ไม่มีรายชื่อให้คัดลอก');
+          showToast('⚠️ No accounts to copy');
           return;
         }
         const text = list.map(u => `@${u}`).join('\n');
         navigator.clipboard.writeText(text).then(() => {
-          showToast(`✓ คัดลอก ${list.length} บัญชีแล้ว`);
+          showToast(`✓ Copied ${list.length} accounts to clipboard`);
         });
       };
 
@@ -2333,6 +2431,7 @@
       const startLiveBtn = drawer.querySelector('#tm-start-live-capture');
       const finishLiveBtn = drawer.querySelector('#tm-live-finish');
       const cancelLiveBtn = drawer.querySelector('#tm-live-cancel');
+      const autoScrollBtn = drawer.querySelector('#tm-btn-autoscroll');
       const switchFollowersBtn = drawer.querySelector('#tm-switch-to-followers');
       const switchFollowingBtn = drawer.querySelector('#tm-switch-to-following');
 
@@ -2345,14 +2444,35 @@
       const followingCnt = drawer.querySelector('#tm-live-following-cnt');
       const followingTotal = drawer.querySelector('#tm-live-following-total');
 
+      const resetAutoScrollUI = () => {
+        if (autoScrollBtn) {
+          autoScrollBtn.textContent = '⚡ Auto-Scroll: Off';
+          autoScrollBtn.classList.remove('active');
+        }
+      };
+
+      if (autoScrollBtn) {
+        autoScrollBtn.onclick = () => {
+          const isNowActive = TM_RelationshipAuditor.toggleAutoScroll();
+          if (isNowActive) {
+            autoScrollBtn.textContent = '⏸️ Pause Auto-Scroll';
+            autoScrollBtn.classList.add('active');
+            showToast('⚡ Auto-Scroll enabled');
+          } else {
+            resetAutoScrollUI();
+            showToast('⏸️ Auto-Scroll paused');
+          }
+        };
+      }
+
       startLiveBtn.onclick = () => {
         const openDialog = document.querySelector('[role="dialog"]');
         if (!openDialog) {
-          showToast('⚠️ กรุณาคลิก "ผู้ติดตาม" หรือ "กำลังติดตาม" บนหน้าโปรไฟล์ก่อนกดเริ่มค่ะ');
+          showToast('⚠️ Please open Followers or Following modal on your profile first');
           return;
         }
 
-        const username = TM_RelationshipAuditor.detectUsername() || prompt('กรุณาระบุ Username ของคุณ (เช่น choke.dev):');
+        const username = TM_RelationshipAuditor.detectUsername() || prompt('Please enter your Threads username (e.g. choke.dev):');
         if (!username) return;
 
         const started = TM_RelationshipAuditor.startLiveCapture(username, (state) => {
@@ -2369,28 +2489,28 @@
           if (state.activeTab === 'followers') {
             cardFollowers.classList.add('active');
             cardFollowing.classList.remove('active');
-            pillFollowers.textContent = 'กำลังกวาด 🟢';
+            pillFollowers.textContent = 'Scanning 🟢';
             pillFollowers.className = 'tm-live-status-pill active';
-            pillFollowing.textContent = 'รอกวาด ⚪';
+            pillFollowing.textContent = 'Waiting ⚪';
             pillFollowing.className = 'tm-live-status-pill';
           } else {
             cardFollowing.classList.add('active');
             cardFollowers.classList.remove('active');
-            pillFollowing.textContent = 'กำลังกวาด 🟢';
+            pillFollowing.textContent = 'Scanning 🟢';
             pillFollowing.className = 'tm-live-status-pill active';
-            pillFollowers.textContent = 'รอกวาด ⚪';
+            pillFollowers.textContent = 'Waiting ⚪';
             pillFollowers.className = 'tm-live-status-pill';
           }
         });
 
         if (!started) {
-          showToast('⚠️ ไม่สามารถเชื่อมต่อหน้าต่างรายชื่อได้');
+          showToast('⚠️ Could not attach to modal');
           return;
         }
 
         idleActions.style.display = 'none';
         liveBox.style.display = 'block';
-        showToast('🟢 โหมดดักจับสดเริ่มทำงานแล้ว เลื่อนเมาส์บนรายชื่อได้เลยค่ะ');
+        showToast('🟢 Live Capture started. Scroll the list to capture accounts.');
       };
 
       switchFollowersBtn.onclick = () => {
@@ -2403,20 +2523,21 @@
 
       finishLiveBtn.onclick = async () => {
         finishLiveBtn.disabled = true;
-        finishLiveBtn.textContent = 'กำลังประมวลผล...';
+        finishLiveBtn.textContent = 'Calculating...';
         try {
           const result = await TM_RelationshipAuditor.finishLiveCapture();
           if (result && result.diff) {
             TM_Studio.activeDiff = result.diff;
             TM_Studio.renderAuditorData(drawer, result.diff);
             TM_Studio.renderAuditorList(drawer);
-            showToast(`✓ สำเร็จ! ผู้ติดตาม ${result.followers.length.toLocaleString()} | กำลังติดตาม ${result.following.length.toLocaleString()}`);
+            showToast(`✓ Audit complete: ${result.followers.length.toLocaleString()} Followers | ${result.following.length.toLocaleString()} Following`);
           }
         } catch (err) {
           showToast(`⚠️ ${err.message}`);
         } finally {
           finishLiveBtn.disabled = false;
-          finishLiveBtn.textContent = '✅ คำนวณและสรุปผลความสัมพันธ์';
+          finishLiveBtn.textContent = '✅ Calculate Relationships';
+          resetAutoScrollUI();
           liveBox.style.display = 'none';
           idleActions.style.display = 'block';
         }
@@ -2424,9 +2545,10 @@
 
       cancelLiveBtn.onclick = () => {
         TM_RelationshipAuditor.stopLiveCapture();
+        resetAutoScrollUI();
         liveBox.style.display = 'none';
         idleActions.style.display = 'block';
-        showToast('⏹️ ยกเลิกการดักจับสด');
+        showToast('⏹️ Live Capture cancelled');
       };
 
       // Close handlers
@@ -2488,7 +2610,7 @@
       const users = TM_Studio.getCurrentFilteredUsers(drawer);
 
       if (users.length === 0) {
-        listContainer.innerHTML = '<div class="tm-empty-state">ไม่พบบัญชีในหมวดหมู่นี้</div>';
+        listContainer.innerHTML = '<div class="tm-empty-state">No accounts found in this view</div>';
         return;
       }
 
@@ -2500,7 +2622,7 @@
                 <span class="tm-user-avatar">👤</span>
                 <span class="tm-user-name">@${escapeHtml(u)}</span>
               </a>
-              <button type="button" class="tm-copy-user-btn tm-btn-sub" data-user="${escapeHtml(u)}" title="คัดลอกชื่อ">📋</button>
+              <button type="button" class="tm-copy-user-btn tm-btn-sub" data-user="${escapeHtml(u)}" title="Copy username">📋</button>
             </div>
           `).join('')}
         </div>
@@ -2511,7 +2633,7 @@
           e.stopPropagation();
           const u = btn.dataset.user;
           navigator.clipboard.writeText(`@${u}`).then(() => {
-            showToast(`✓ คัดลอก @${u}`);
+            showToast(`✓ Copied @${u}`);
           });
         };
       });
@@ -3201,7 +3323,42 @@
         font-size: 11px !important;
         color: #aaaaaa !important;
         line-height: 1.4 !important;
+        margin-bottom: 10px !important;
+      }
+      .tm-live-autoscroll-bar {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        background: #202020 !important;
+        border: 1px solid #2e2e2e !important;
+        border-radius: 6px !important;
+        padding: 6px 10px !important;
         margin-bottom: 12px !important;
+      }
+      .tm-btn-autoscroll {
+        background: #2a2a2a !important;
+        color: #ffffff !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        padding: 4px 10px !important;
+        border-radius: 4px !important;
+        border: 1px solid #3a3a3a !important;
+        cursor: pointer !important;
+        transition: all 140ms ease !important;
+      }
+      .tm-btn-autoscroll:hover {
+        background: #333333 !important;
+      }
+      .tm-btn-autoscroll.active {
+        background: #00875a !important;
+        border-color: #00a36c !important;
+        color: #ffffff !important;
+        box-shadow: 0 0 10px rgba(0, 135, 90, 0.4) !important;
+        animation: tmPulse 1.4s infinite ease-in-out !important;
+      }
+      .tm-autoscroll-desc {
+        font-size: 10px !important;
+        color: #888888 !important;
       }
       .tm-live-cards {
         display: flex !important;

@@ -1,58 +1,124 @@
-# ThreadMax ⚡
+<div align="center">
 
-**Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps, Thread Unroller & Growth Intelligence for Threads Web.**
+# ⚡ ThreadMax <sub>v1.4.0</sub>
 
-A high-performance, zero-dependency Tampermonkey userscript engineered to eliminate web friction, unlock 1-click high-res media extraction, boost reading velocity, and provide engagement growth intelligence on `threads.com` and `threads.net`.
+**Precision Media Intelligence, Native Video Booster, Thread Unroller & Growth Suite for Threads Web**
 
----
+*Anti-Slop Minimal Precision · Zero Dependencies · In-Memory ZIP32 · 100% Client-Side Privacy*  
+*Engineered for [threads.net](https://www.threads.net/) & [threads.com](https://www.threads.com/)*
 
-## 🚀 Key Capabilities
+[![Version: v1.4.0](https://img.shields.io/badge/Version-v1.4.0-10b981?style=for-the-badge)](https://github.com/Stxyu-p/threadmax)
+[![Platform: Threads Web](https://img.shields.io/badge/Platform-threads.net-black?style=for-the-badge&logo=threads&logoColor=white)](https://www.threads.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=for-the-badge)](LICENSE)
 
-| Feature | Category | Description |
-| :--- | :--- | :--- |
-| **Carousel & Bulk Downloader** | Media Engine | 1-Click download for single media; interactive carousel selector; zero-dep client-side **ZIP32 packing** with pre-computed CRC32 tables. |
-| **Video Player Booster** | Media Engine | Overlay video controller with cycling playback speed (**1.0x → 1.25x → 1.5x → 2.0x**), **Picture-in-Picture (PiP)**, and automatic **volume memory**. |
-| **Clean Link Sanitizer** | Utility | Strips Meta tracking parameters (`?xmt=`, `?s=`, etc.) for clean, shareable post URLs. |
-| **Smart Timestamps** | Reading | Configurable timestamp modes: **Hybrid** (`2h (14:30)`), **Absolute** (`20/09/2026 14:30`), or **Native**. |
-| **Thread Unroller** | Reading | Concentrates all author replies in long threads into a unified Clean Reader modal with **1-Click Markdown Export**. |
-| **Composer Hook Guide** | Creator Tool | Real-time viewport cutoff detection warning creators when text exceeds the 180-character mobile fold. |
-| **One-Click Thread Splitter** | Creator Tool | Automatically chunks long texts (>500 chars) into numbered `1/N` thread segments preserving sentence and paragraph integrity. |
-| **Viral Velocity Radar** | Growth Radar | Detects rapidly rising posts ($(\text{Replies}\times 2 + \text{Reposts}\times 1.5)/\text{Age}$) and injects subtle `⚡ Rising` badges for early engagement. |
-| **Mutual Relationship Auditor** | Studio | Local IndexedDB snapshot diffing to audit mutual followers, non-followers back, fans, and lost/gained connections with safe pacing. |
+![Dependencies: Zero](https://img.shields.io/badge/Dependencies-Zero-success?style=flat-square)
+![Engine: Vanilla JS](https://img.shields.io/badge/Engine-Pure%20ES2022-cyan?style=flat-square)
+![Storage: IndexedDB](https://img.shields.io/badge/Storage-IndexedDB%20Vault-blue?style=flat-square)
+![Safety: Safe Pacing](https://img.shields.io/badge/Safety-Anti--Detection%20Jitter-purple?style=flat-square)
+
+</div>
 
 ---
 
-## 🛠️ Architecture & Invariants
+## 📸 Interface Preview
 
-- **100% Client-Side & Zero Telemetry:** Operates strictly within the user's browser session. No data is ever transmitted to external servers.
-- **Zero External Dependencies:** Built entirely in pure vanilla JavaScript without bulky libraries (no external JSZip, jQuery, or bloated frameworks).
-- **Anti-Slop Clean Precision UI:** Dark OLED palette (`#141414`, `#1e1e1e`), hairline precision borders (`#282828`), and native layout integration (`yDiff = 0px`).
-- **Resilient Stacking Protection:** Dynamically manages CSS stacking contexts (`z-index: 9999`) to prevent sunken popups or layout overlaps across virtualized feeds.
+<p align="center">
+  <img src="shot_clean.png" alt="ThreadMax Clean UI & Video Controller" width="100%">
+</p>
+
+<p align="center">
+  <img src="shot_v110.png" alt="ThreadMax Studio Drawer & Harvester" width="100%">
+</p>
 
 ---
 
-## 📦 Installation
+## ⚡ Core Pillars & Capabilities
 
-1. Install a userscript manager (e.g. [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)).
+| Capability | Module | What It Does | Technical Advantage |
+| :--- | :---: | :--- | :--- |
+| **In-Feed Action Trigger** | 📥 | Injects a discrete 5th action icon directly beside Like, Comment, Repost, and Share. | Zero layout shift; auto-detects media type and adjusts dropdown context. |
+| **In-Memory ZIP32 Compiler** | 📦 | Compresses multi-slide carousels into a single `.zip` archive on the fly. | Zero external libraries (no JSZip); uses pre-computed CRC32 table for instant compression. |
+| **Video Player Booster** | 🎬 | Floating overlay controller with cycle playback speed (**1.0x → 1.25x → 1.5x → 2.0x**), **PiP**, and volume memory. | Pure DOM binding to `HTMLVideoElement`; automatically persists volume to avoid audio shock. |
+| **Clean Link Sanitizer** | 🔗 | 1-Click URL copy that strips Meta tracking junk (`?xmt=`, `?s=`, etc.). | Exports pristine canonical URLs `https://www.threads.net/@user/post/id`. |
+| **Smart Timestamps** | ⏱️ | Formats relative timestamps into **Hybrid** (`2h (14:30)`), **Absolute**, or **Native**. | Parses `<time datetime="...">` ISO strings into localized machine time. |
+| **Thread Unroller** | 📖 | Collects long author threads (1/N, 2/N) into a unified modal reader with **1-Click Markdown Export**. | Eliminates feed noise and provides clean copy for Obsidian and Notion. |
+| **Composer Hook Guide** | ✍️ | Renders a subtle hairline marker inside the composer indicating the 180-char mobile cutoff. | Visual feedback ensures key hooks never get hidden behind `...more`. |
+| **1-Click Thread Splitter** | ✂️ | Automatically chunks texts >500 characters into numbered `1/N` segments with sentence preservation. | Pre-fills reply boxes sequentially without manual copy-pasting. |
+| **Viral Velocity Radar** | 🚀 | Detects rising discussions early with mathematical engagement scoring. | Identifies high-traction threads while comments are still low (<30). |
+| **Relationship Auditor** | 👥 | Local IndexedDB snapshot diffing: Non-followers back, Fans, Mutuals, and Gained/Lost accounts. | 100% local IndexedDB storage with bounded batch scanning (3,000–5,000ms jitter). |
+
+---
+
+## 🔬 Under the Hood: Engineering Invariants
+
+### 1. The Viral Velocity Algorithm
+
+To discover viral posts early without waiting for platform algorithm feeds to saturate, ThreadMax computes real-time velocity metrics directly from client-side DOM telemetry:
+
+$$\text{Velocity Score} = \frac{(\text{Replies} \times 2) + (\text{Reposts} \times 1.5)}{\text{Post Age (minutes)}}$$
+
+When a post exceeds the sensitivity threshold with $\text{Replies} < 30$, ThreadMax attaches a discrete `⚡ Rising` indicator, enabling creators and analysts to contribute early high-value responses.
+
+### 2. Meta Virtualized DOM & Stacking Context Breakout
+
+Threads Web aggressively recycles DOM nodes and traps popups within constrained `overflow: hidden` bounding boxes. ThreadMax implements an **Out-of-Flow Stacking Portal**:
+- Action dropdowns and modals escape parent CSS stacking contexts (`z-index: 9999`).
+- Viewport bounds checking prevents clipping at the edges of the screen.
+- Active listeners auto-dismiss on scroll or external pointer clicks.
+
+### 3. Pure Client-Side ZIP32 Engine
+
+Traditional browser downloaders rely on bulky multi-megabyte dependencies like JSZip. ThreadMax incorporates an ultra-lightweight ZIP32 packager:
+- **Pre-computed 256-entry CRC32 table** generates checksums with bitwise speed.
+- In-memory `Uint8Array` binary builder streams headers, file data, and central directory records directly to `Blob`.
+- Memory footprint remains strictly bounded to active media asset size (<30MB RSS).
+
+---
+
+## 🚀 Installation & Setup
+
+1. Install a userscript manager in your browser:
+   - [Tampermonkey](https://www.tampermonkey.net/) (Recommended)
+   - [Violentmonkey](https://violentmonkey.github.io/)
 2. Install **ThreadMax**:
-   - **Local / Direct:** Copy the contents of [`threadmax.user.js`](./threadmax.user.js) into your userscript manager.
-   - **Target Domains:** Automatically matches `https://www.threads.com/*` and `https://www.threads.net/*`.
+   - Install directly via GitHub Raw:  
+     👉 **[Install threadmax.user.js](https://raw.githubusercontent.com/Stxyu-p/threadmax/main/threadmax.user.js)**
+3. Navigate to [threads.net](https://www.threads.net/) or [threads.com](https://www.threads.com/). The discrete `⚡ ThreadMax Studio` trigger appears at the bottom-left corner of the screen.
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration & Studio Drawer
 
-Open **ThreadMax Studio** by clicking the discrete `⚡ ThreadMax Studio` button at the bottom-left corner of the page or via the Tampermonkey extension menu:
+Click `⚡ ThreadMax Studio` or use Tampermonkey menu to customize:
 
-- **Download Mode:** Choose between Stored ZIP (`.zip`) or sequential Individual downloads.
-- **Timestamp Mode:** Toggle between `Hybrid` (recommended), `Absolute`, and `Native`.
-- **Viral Velocity Radar:** Toggle live rising badges and sensitivity thresholds.
+| Setting | Options | Default |
+| :--- | :--- | :--- |
+| **Download Mode** | Stored ZIP (`.zip`) / Individual Files | `Stored ZIP` |
+| **Timestamp Mode** | `Hybrid` / `Absolute` / `Native` | `Hybrid` |
+| **Video Speed** | `1.0x` / `1.25x` / `1.5x` / `2.0x` | `1.0x` |
+| **Viral Radar** | Enabled / Disabled | `Enabled` |
+| **Audit Batch Size** | Bounded 20 profiles / jitter 3.5s–6.0s | Enforced |
+
+---
+
+## 🧪 Verification & Test Suite
+
+Run syntax check and local tests:
+
+```powershell
+# 1. Lexical and syntax validation
+node --check threadmax.user.js
+
+# 2. Automated test suite
+node threadmax.test.cjs
+```
 
 ---
 
 ## 📄 License
 
-MIT License © 2026 P Choke & MIKA.
+Distributed under the [MIT License](LICENSE).  
+Copyright (c) 2026 P Choke & MIKA.
 
 ---
 
@@ -71,4 +137,3 @@ A curated collection of local-first, zero-telemetry, and performance-critical sy
 <div align="center">
 <sub>Crafted with engineering discipline · Local-First · Zero Telemetry · High Performance</sub>
 </div>
-

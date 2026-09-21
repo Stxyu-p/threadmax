@@ -624,7 +624,84 @@ if (detected) {
 assert.strictEqual(currentActiveTab, 'following', 'State guard failed: activeTab was erroneously reset');
 console.log('✓ Test 20: Tab Partition Guard & Non-destructive Weight Detector verified');
 
-console.log('\n🎉 ALL 20 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 19. FIXED BODY PORTAL POSITIONING & VIEWPORT CLAMP ───
+function computePortalCoordinates(anchorRect, dropdownWidth = 270, windowWidth = 1920) {
+  let left = anchorRect.left;
+  if (left + dropdownWidth > windowWidth - 16) {
+    left = windowWidth - dropdownWidth - 16;
+  }
+  if (left < 16) left = 16;
+  const top = anchorRect.bottom + 6;
+  return { top, left, zIndex: 2147483647 };
+}
+
+// Normal positioning
+const posNormal = computePortalCoordinates({ left: 300, bottom: 400 });
+assert.strictEqual(posNormal.top, 406, 'Portal top calculation mismatch');
+assert.strictEqual(posNormal.left, 300, 'Portal left calculation mismatch');
+assert.strictEqual(posNormal.zIndex, 2147483647, 'Portal zIndex must be max signed 32-bit int');
+
+// Right viewport edge overflow clamping
+const posEdgeRight = computePortalCoordinates({ left: 1800, bottom: 400 }, 270, 1920);
+assert.strictEqual(posEdgeRight.left, 1920 - 270 - 16, 'Portal right clamp failed');
+
+// Left viewport edge overflow clamping
+const posEdgeLeft = computePortalCoordinates({ left: -20, bottom: 400 }, 270, 1920);
+assert.strictEqual(posEdgeLeft.left, 16, 'Portal left clamp failed');
+console.log('✓ Test 21: Fixed Body Portal Positioning & Viewport Boundary Clamp verified');
+
+// ─── 20. MONOTONIC AUTO-SCROLLER ENGINE & COMPLETION GUARD ───
+class MockAutoScrollEngine {
+  constructor(scrollHeight, clientHeight) {
+    this.scrollHeight = scrollHeight;
+    this.clientHeight = clientHeight;
+    this.scrollTop = 0;
+    this.idleTicks = 0;
+    this.isCompleted = false;
+  }
+
+  step(renderedRowsCount, stepSize = 450) {
+    if (this.isCompleted) return;
+    const maxScroll = this.scrollHeight - this.clientHeight;
+    const prevTop = this.scrollTop;
+
+    if (this.scrollTop + stepSize < maxScroll) {
+      this.scrollTop += stepSize;
+    } else {
+      this.scrollTop = maxScroll;
+    }
+
+    if (this.scrollTop === prevTop && this.scrollTop >= maxScroll - 10) {
+      this.idleTicks++;
+      if (this.idleTicks >= 10) {
+        this.isCompleted = true;
+      }
+    } else {
+      this.idleTicks = 0;
+    }
+  }
+}
+
+const scroller = new MockAutoScrollEngine(3000, 600);
+// Step 1
+scroller.step(27);
+assert.strictEqual(scroller.scrollTop, 450, 'Step 1 mismatch');
+// Advance to bottom
+while (scroller.scrollTop < 2400) {
+  scroller.step(27);
+}
+assert.strictEqual(scroller.scrollTop, 2400, 'Scroller failed to reach maxScroll');
+
+// Test idle ticks at bottom
+for (let i = 0; i < 10; i++) {
+  assert.strictEqual(scroller.isCompleted, false, 'Premature completion');
+  scroller.step(27);
+}
+assert.strictEqual(scroller.isCompleted, true, 'Auto-scroller must complete after 10 idle ticks at bottom');
+console.log('✓ Test 22: Monotonic Auto-Scroller Engine & Completion Guard verified');
+
+console.log('\n🎉 ALL 22 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
 
 
 

@@ -674,29 +674,18 @@
     },
 
     showCarouselDropdown: (anchorWrapper, anchorBtn, postData) => {
-      const card = postData.card;
-      const actionRow = anchorWrapper.parentElement;
-
-      // Toggle close if already open
-      const existing = anchorWrapper.querySelector('.tm-dropdown');
+      // Toggle close if already open for this button
+      const existing = document.querySelector('.tm-dropdown');
       if (existing) {
+        const wasSameAnchor = existing._anchorBtn === anchorBtn;
         existing.remove();
-        if (card) card.style.zIndex = '';
-        if (actionRow) actionRow.style.zIndex = '';
-        anchorWrapper.style.zIndex = '';
-        return;
+        if (wasSameAnchor) return;
       }
-
-      document.querySelectorAll('.tm-dropdown').forEach(d => d.remove());
-
-      // Elevate Stacking Context to prevent "กล่องจม"
-      if (card) card.style.zIndex = '9999';
-      if (actionRow) actionRow.style.zIndex = '9999';
-      anchorWrapper.style.zIndex = '9999';
 
       const mode = TM_Config.get(CONFIG_KEYS.DOWNLOAD_MODE, 'zip');
       const dropdown = document.createElement('div');
       dropdown.className = 'tm-dropdown';
+      dropdown._anchorBtn = anchorBtn;
 
       const allItem = document.createElement('div');
       allItem.className = 'tm-dropdown-item';
@@ -706,12 +695,10 @@
       selectItem.className = 'tm-dropdown-item';
       selectItem.innerHTML = `<span class="tm-dropdown-icon">☑️</span><span>เลือกดาวน์โหลดเฉพาะไฟล์...</span>`;
 
+      let cleanupListeners = null;
       const closeDropdown = () => {
         dropdown.remove();
-        if (card) card.style.zIndex = '';
-        if (actionRow) actionRow.style.zIndex = '';
-        anchorWrapper.style.zIndex = '';
-        document.removeEventListener('click', onDocClick);
+        if (typeof cleanupListeners === 'function') cleanupListeners();
       };
 
       allItem.onclick = (e) => {
@@ -728,14 +715,42 @@
 
       dropdown.appendChild(allItem);
       dropdown.appendChild(selectItem);
-      anchorWrapper.appendChild(dropdown);
+
+      // Mount to document.body via Fixed Portal to prevent stacking context & feed clipping
+      const rect = anchorBtn.getBoundingClientRect();
+      const dropdownWidth = 270;
+      let left = rect.left;
+      if (left + dropdownWidth > window.innerWidth - 16) {
+        left = window.innerWidth - dropdownWidth - 16;
+      }
+      if (left < 16) left = 16;
+
+      dropdown.style.position = 'fixed';
+      dropdown.style.top = `${rect.bottom + 6}px`;
+      dropdown.style.left = `${left}px`;
+      dropdown.style.zIndex = '2147483647';
+
+      document.body.appendChild(dropdown);
 
       const onDocClick = (evt) => {
-        if (!dropdown.contains(evt.target) && !anchorWrapper.contains(evt.target)) {
+        if (!dropdown.contains(evt.target) && !anchorBtn.contains(evt.target)) {
           closeDropdown();
         }
       };
-      setTimeout(() => document.addEventListener('click', onDocClick), 50);
+
+      const onScrollOrResize = () => closeDropdown();
+
+      cleanupListeners = () => {
+        document.removeEventListener('click', onDocClick, true);
+        window.removeEventListener('scroll', onScrollOrResize, true);
+        window.removeEventListener('resize', onScrollOrResize);
+      };
+
+      setTimeout(() => {
+        document.addEventListener('click', onDocClick, true);
+        window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true });
+        window.addEventListener('resize', onScrollOrResize);
+      }, 50);
     }
   };
 
@@ -1660,27 +1675,38 @@
       if (!dialog) return [];
       const containers = new Set();
 
-      // Priority 1: Trace upward from any rendered user account link
-      const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
-      for (const a of links) {
-        let p = a.parentElement;
-        while (p && p !== dialog && p !== document.body) {
-          if (p.scrollHeight > p.clientHeight + 10 && p.clientHeight > 60) {
-            containers.add(p);
-          }
-          p = p.parentElement;
+      // Priority 1: Check elements with explicit scrollable overflow-y and scrollable height
+      const all = Array.from(dialog.querySelectorAll('*'));
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 60) {
+          try {
+            const style = window.getComputedStyle(el);
+            const oy = style.overflowY;
+            if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
+              containers.add(el);
+            }
+          } catch (_) {}
         }
-        if (containers.size > 0) break;
       }
 
-      // Priority 2: Check all descendant elements in dialog that have scrollable overflow
+      // Priority 2: Trace upward from user account links (for virtual lists or mock testing)
       if (containers.size === 0) {
-        const all = Array.from(dialog.querySelectorAll('*'));
-        for (const el of all) {
-          if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 60) {
-            containers.add(el);
+        const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+        for (const a of links) {
+          let p = a.parentElement;
+          while (p && p !== dialog && p !== document.body) {
+            if (p.scrollHeight > p.clientHeight + 10 && p.clientHeight > 60) {
+              containers.add(p);
+            }
+            p = p.parentElement;
           }
+          if (containers.size > 0) break;
         }
+      }
+
+      // Priority 3: Fallback to dialog itself
+      if (containers.size === 0 && dialog.scrollHeight > dialog.clientHeight + 10) {
+        containers.add(dialog);
       }
 
       return Array.from(containers).length > 0 ? Array.from(containers) : [dialog];
@@ -1762,12 +1788,16 @@
 
     autoScrollState: {
       isActive: false,
-      timer: null
+      timer: null,
+      idleTicks: 0,
+      lastCount: 0
     },
 
     startAutoScroll: (onTick) => {
       if (TM_RelationshipAuditor.autoScrollState.isActive) return;
       TM_RelationshipAuditor.autoScrollState.isActive = true;
+      TM_RelationshipAuditor.autoScrollState.idleTicks = 0;
+      TM_RelationshipAuditor.autoScrollState.lastCount = 0;
 
       const step = () => {
         if (!TM_RelationshipAuditor.autoScrollState.isActive) return;
@@ -1778,22 +1808,64 @@
         }
 
         const containers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+        let scrolledAny = false;
+
         for (const c of containers) {
-          c.scrollBy({ top: 380, behavior: 'smooth' });
+          const maxScroll = c.scrollHeight - c.clientHeight;
+          if (maxScroll <= 0) continue;
+
+          const prevTop = c.scrollTop;
+          const stepSize = Math.max(300, Math.min(600, Math.round(c.clientHeight * 0.85)));
+
+          if (c.scrollTop + stepSize < maxScroll) {
+            c.scrollTop += stepSize;
+          } else {
+            c.scrollTop = maxScroll;
+          }
+
+          if (c.scrollTop !== prevTop || c.scrollTop >= maxScroll - 20) {
+            scrolledAny = true;
+          }
+
           c.dispatchEvent(new Event('scroll', { bubbles: true }));
+          try {
+            c.dispatchEvent(new WheelEvent('wheel', {
+              deltaY: stepSize,
+              bubbles: true,
+              cancelable: true
+            }));
+          } catch (_) {}
+        }
+
+        // Trigger intersection observers by ensuring any loader/spinner is in view
+        const loaders = dialog.querySelectorAll('[role="progressbar"], svg[aria-label*="Loading"], div[data-visualcompletion="loading-state"]');
+        if (loaders.length > 0) {
+          try {
+            loaders[loaders.length - 1].scrollIntoView({ block: 'end' });
+          } catch (_) {}
         }
 
         const rows = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
-        if (rows.length > 0) {
-          try {
-            rows[rows.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
-          } catch (_) {}
+        const currentCount = rows.length;
+
+        if (currentCount === TM_RelationshipAuditor.autoScrollState.lastCount && !scrolledAny) {
+          TM_RelationshipAuditor.autoScrollState.idleTicks++;
+          if (TM_RelationshipAuditor.autoScrollState.idleTicks >= 10) {
+            TM_RelationshipAuditor.stopAutoScroll();
+            if (typeof TM_RelationshipAuditor.onAutoScrollComplete === 'function') {
+              TM_RelationshipAuditor.onAutoScrollComplete();
+            }
+            return;
+          }
+        } else {
+          TM_RelationshipAuditor.autoScrollState.idleTicks = 0;
+          TM_RelationshipAuditor.autoScrollState.lastCount = currentCount;
         }
 
         if (typeof onTick === 'function') onTick();
       };
 
-      TM_RelationshipAuditor.autoScrollState.timer = setInterval(step, 300);
+      TM_RelationshipAuditor.autoScrollState.timer = setInterval(step, 400);
     },
 
     stopAutoScroll: () => {
@@ -2451,6 +2523,11 @@
         }
       };
 
+      TM_RelationshipAuditor.onAutoScrollComplete = () => {
+        resetAutoScrollUI();
+        showToast('✓ Auto-Scroll completed: reached end of list');
+      };
+
       if (autoScrollBtn) {
         autoScrollBtn.onclick = () => {
           const isNowActive = TM_RelationshipAuditor.toggleAutoScroll();
@@ -2686,17 +2763,15 @@
         transform: scale(0.92) !important;
       }
 
-      /* Dropdown Menu (Anchored inside wrapper + High Z-Index) */
+      /* Dropdown Menu (Fixed Body Portal + High Contrast Card) */
       .tm-dropdown {
-        position: absolute !important;
-        top: calc(100% + 4px) !important;
-        right: 0 !important;
-        z-index: 999999 !important;
-        min-width: 250px !important;
-        background-color: #161616 !important;
-        border: 1px solid #2e2e2e !important;
+        position: fixed !important;
+        z-index: 2147483647 !important;
+        min-width: 260px !important;
+        background: #1c1c1e !important;
+        border: 1px solid #3a3a3c !important;
         border-radius: 10px !important;
-        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.9) !important;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
         padding: 6px !important;
         display: flex !important;
         flex-direction: column !important;
@@ -2721,7 +2796,8 @@
         white-space: nowrap !important;
       }
       .tm-dropdown-item:hover {
-        background-color: #262626 !important;
+        background-color: #2c2c2e !important;
+        color: #ffffff !important;
       }
       .tm-dropdown-icon {
         font-size: 15px !important;
@@ -3328,37 +3404,45 @@
       .tm-live-autoscroll-bar {
         display: flex !important;
         align-items: center !important;
-        justify-content: space-between !important;
-        background: #202020 !important;
-        border: 1px solid #2e2e2e !important;
-        border-radius: 6px !important;
-        padding: 6px 10px !important;
+        gap: 10px !important;
+        background: #1c1c1e !important;
+        border: 1px solid #2c2c2e !important;
+        border-radius: 8px !important;
+        padding: 8px 12px !important;
         margin-bottom: 12px !important;
       }
       .tm-btn-autoscroll {
-        background: #2a2a2a !important;
-        color: #ffffff !important;
+        flex-shrink: 0 !important;
+        background: #2c2c2e !important;
+        color: #e5e5ea !important;
         font-size: 11px !important;
         font-weight: 600 !important;
-        padding: 4px 10px !important;
-        border-radius: 4px !important;
-        border: 1px solid #3a3a3a !important;
+        padding: 6px 12px !important;
+        border-radius: 6px !important;
+        border: 1px solid #3a3a3c !important;
         cursor: pointer !important;
-        transition: all 140ms ease !important;
+        transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease !important;
+        white-space: nowrap !important;
+        transform: none !important;
+        animation: none !important;
       }
       .tm-btn-autoscroll:hover {
-        background: #333333 !important;
+        background: #3a3a3c !important;
+        color: #ffffff !important;
       }
       .tm-btn-autoscroll.active {
         background: #00875a !important;
         border-color: #00a36c !important;
         color: #ffffff !important;
-        box-shadow: 0 0 10px rgba(0, 135, 90, 0.4) !important;
-        animation: tmPulse 1.4s infinite ease-in-out !important;
+        box-shadow: none !important;
+        transform: none !important;
+        animation: none !important;
       }
       .tm-autoscroll-desc {
-        font-size: 10px !important;
+        font-size: 11px !important;
         color: #888888 !important;
+        line-height: 1.3 !important;
+        flex: 1 !important;
       }
       .tm-live-cards {
         display: flex !important;

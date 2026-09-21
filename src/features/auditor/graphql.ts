@@ -269,3 +269,68 @@ export function installGraphQLSniffer(): void {
     console.warn('[ThreadMax] Failed to install sniffer:', e);
   }
 }
+
+// ─── Unfollow Action ────────────────────────────────────────────────────────
+export async function unfollowUser(username: string, explicitUserId: string | null = null): Promise<boolean> {
+  const cleanUser = String(username).replace(/^@/, '').toLowerCase().trim();
+  let uid = explicitUserId;
+  if (!uid) {
+    uid = await fetchUserId(cleanUser);
+  }
+  if (!uid) {
+    if (typeof window !== 'undefined') {
+      window.open(`https://www.threads.net/@${cleanUser}`, '_blank', 'noopener');
+    }
+    throw new Error('USER_ID_NOT_FOUND');
+  }
+
+  const csrfToken = (typeof document !== 'undefined' && document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/)?.[1]) || '';
+  const lsd = (typeof document !== 'undefined' && (document.querySelector('input[name="lsd"]') as HTMLInputElement)?.value) ||
+              (typeof unsafeWindow !== 'undefined' && (unsafeWindow as any).LSD?.token) || '';
+  const baseOrigin = (typeof window !== 'undefined' && window.location.origin) || 'https://www.threads.com';
+
+  const candidateRoutes = [
+    {
+      url: `${baseOrigin}/api/v1/friendships/destroy/${uid}/`,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-IG-App-ID': '238260118658252',
+        'X-CSRFToken': csrfToken,
+        'X-FB-LSD': lsd,
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: new URLSearchParams({ user_id: uid, radio_type: 'wifi-none' }).toString(),
+    },
+    {
+      url: `${baseOrigin}/web/friendships/${uid}/unfollow/`,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-CSRFToken': csrfToken,
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: '',
+    },
+  ];
+
+  let lastError: Error | null = null;
+  for (const route of candidateRoutes) {
+    try {
+      const res = await fetch(route.url, {
+        method: 'POST',
+        headers: route.headers,
+        credentials: 'include',
+        body: route.body || undefined,
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        if (json.status === 'ok' || json.friendship_status?.following === false) {
+          return true;
+        }
+      }
+    } catch (e: any) {
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error('UNFOLLOW_FAILED');
+}

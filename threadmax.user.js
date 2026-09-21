@@ -1709,6 +1709,68 @@
       return usernames;
     },
 
+    unfollowUser: async (username, explicitUserId = null) => {
+      const cleanUser = String(username).replace(/^@/, '').toLowerCase().trim();
+      let uid = explicitUserId;
+      if (!uid) {
+        uid = await TM_RelationshipAuditor.fetchUserId(cleanUser);
+      }
+      if (!uid) {
+        window.open(`https://www.threads.net/@${cleanUser}`, '_blank', 'noopener');
+        throw new Error('USER_ID_NOT_FOUND');
+      }
+
+      const csrfToken = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/)?.[1] || '';
+      const lsd = document.querySelector('input[name="lsd"]')?.value ||
+                  (typeof unsafeWindow !== 'undefined' && unsafeWindow.LSD?.token) || '';
+      const baseOrigin = window.location.origin || 'https://www.threads.com';
+
+      const candidateRoutes = [
+        {
+          url: `${baseOrigin}/api/v1/friendships/destroy/${uid}/`,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-IG-App-ID': '238260118658252',
+            'X-CSRFToken': csrfToken,
+            'X-FB-LSD': lsd,
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: new URLSearchParams({ user_id: uid, radio_type: 'wifi-none' }).toString()
+        },
+        {
+          url: `${baseOrigin}/web/friendships/${uid}/unfollow/`,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': csrfToken,
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: ''
+        }
+      ];
+
+      let lastError = null;
+      for (const route of candidateRoutes) {
+        try {
+          const res = await fetch(route.url, {
+            method: 'POST',
+            headers: route.headers,
+            credentials: 'include',
+            body: route.body || undefined
+          });
+          if (res.ok) {
+            const json = await res.json().catch(() => ({}));
+            if (json.status === 'ok' || json.friendship_status?.following === false) {
+              return true;
+            }
+          }
+        } catch (e) {
+          lastError = e;
+        }
+      }
+
+      throw lastError || new Error('UNFOLLOW_FAILED');
+    },
+
     findScrollableContainer: (dialog) => {
       if (!dialog) return null;
       const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
@@ -2902,7 +2964,10 @@
                 <span class="tm-user-avatar">👤</span>
                 <span class="tm-user-name">@${escapeHtml(u)}</span>
               </a>
-              <button type="button" class="tm-copy-user-btn tm-btn-sub" data-user="${escapeHtml(u)}" title="Copy username">📋</button>
+              <div class="tm-user-actions">
+                <button type="button" class="tm-copy-user-btn tm-btn-sub" data-user="${escapeHtml(u)}" title="Copy username">📋</button>
+                <button type="button" class="tm-unfollow-user-btn tm-btn-danger" data-user="${escapeHtml(u)}" title="Unfollow @${escapeHtml(u)}">Unfollow</button>
+              </div>
             </div>
           `).join('')}
         </div>
@@ -2924,6 +2989,35 @@
           navigator.clipboard.writeText(`@${u}`).then(() => {
             showToast(`✓ Copied @${u}`);
           });
+          return;
+        }
+
+        const unfollowBtn = e.target.closest('.tm-unfollow-user-btn');
+        if (unfollowBtn && !unfollowBtn.disabled) {
+          e.stopPropagation();
+          const u = unfollowBtn.dataset.user;
+          if (!confirm(`ยืนยันการเลิกติดตาม (Unfollow) @${u}?`)) return;
+
+          unfollowBtn.disabled = true;
+          unfollowBtn.textContent = 'Unfollowing...';
+
+          TM_RelationshipAuditor.unfollowUser(u)
+            .then(() => {
+              showToast(`✓ เลิกติดตาม @${u} สำเร็จ`);
+              unfollowBtn.textContent = 'Unfollowed';
+              unfollowBtn.className = 'tm-unfollow-user-btn tm-btn-sub';
+              unfollowBtn.style.opacity = '0.5';
+              unfollowBtn.disabled = true;
+            })
+            .catch((err) => {
+              if (err && err.message === 'USER_ID_NOT_FOUND') {
+                showToast(`เปิดหน้าโปรไฟล์ @${u} เพื่อกดยกเลิก`);
+              } else {
+                showToast(`⚠️ เลิกติดตาม @${u} ไม่สำเร็จ`);
+              }
+              unfollowBtn.textContent = 'Unfollow';
+              unfollowBtn.disabled = false;
+            });
           return;
         }
 
@@ -3821,9 +3915,34 @@
       .tm-user-avatar {
         font-size: 14px !important;
       }
+      .tm-user-actions {
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+      }
       .tm-copy-user-btn {
         padding: 3px 8px !important;
         font-size: 11px !important;
+      }
+      .tm-btn-danger {
+        background-color: #241416 !important;
+        color: #f87171 !important;
+        border: 1px solid rgba(244, 63, 94, 0.35) !important;
+        padding: 3px 9px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease !important;
+      }
+      .tm-btn-danger:hover {
+        background-color: #34181c !important;
+        border-color: rgba(244, 63, 94, 0.65) !important;
+        color: #ffffff !important;
+      }
+      .tm-btn-danger:disabled {
+        opacity: 0.45 !important;
+        cursor: default !important;
       }
     `;
     document.head.appendChild(style);

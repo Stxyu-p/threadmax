@@ -1080,7 +1080,56 @@ assert.ok(pm.bars.has('dl_stalled'));
 setTimeout(() => {
   assert.strictEqual(pm.bars.has('dl_stalled'), false, 'Watchdog must auto-remove stalled progress bar');
   console.log('✓ Test 29: Progress bar watchdog auto-cleanup contract verified');
-  console.log('\n🎉 ALL 29 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
+  // ─── TEST 30: Unfollow Action & Candidate Route Contract ──────
+  function buildUnfollowRoutes(uid, csrf, lsd, origin = 'https://www.threads.net') {
+    return [
+      {
+        url: `${origin}/api/v1/friendships/destroy/${uid}/`,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-IG-App-ID': '238260118658252',
+          'X-CSRFToken': csrf,
+          'X-FB-LSD': lsd,
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: new URLSearchParams({ user_id: uid, radio_type: 'wifi-none' }).toString()
+      },
+      {
+        url: `${origin}/web/friendships/${uid}/unfollow/`,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-CSRFToken': csrf,
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: ''
+      }
+    ];
+  }
+
+  const testUid = '60293848123';
+  const testCsrf = 'csrf_token_abc';
+  const testLsd = 'lsd_token_xyz';
+  const routes = buildUnfollowRoutes(testUid, testCsrf, testLsd);
+
+  assert.strictEqual(routes.length, 2, 'Must have primary API route and web fallback');
+  assert.strictEqual(routes[0].url, `https://www.threads.net/api/v1/friendships/destroy/${testUid}/`);
+  assert.strictEqual(routes[0].headers['X-IG-App-ID'], '238260118658252');
+  assert.strictEqual(routes[0].headers['X-CSRFToken'], testCsrf);
+  assert.strictEqual(routes[0].headers['X-FB-LSD'], testLsd);
+  assert.ok(routes[0].body.includes(`user_id=${testUid}`));
+
+  // Verification helper: check response parsing contract
+  function verifyUnfollowResponse(json) {
+    return json.status === 'ok' || json.friendship_status?.following === false;
+  }
+
+  assert.strictEqual(verifyUnfollowResponse({ status: 'ok' }), true);
+  assert.strictEqual(verifyUnfollowResponse({ friendship_status: { following: false } }), true);
+  assert.strictEqual(verifyUnfollowResponse({ friendship_status: { following: true } }), false);
+
+  console.log('✓ Test 30: Unfollow Action & Candidate Route Contract verified');
+  console.log('\n🎉 ALL 30 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 

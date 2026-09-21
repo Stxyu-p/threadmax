@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         ThreadMax
 // @namespace    https://github.com/Stxyu-p/threadmax
-// @version      1.2.0
-// @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps, Thread Unroller, Splitter & Growth Studio for Threads Web
+// @version      1.4.0
+// @description  Precision Media Downloader, Video Booster, Clean Link, Smart Timestamps, Thread Unroller, Splitter, Viral Radar & Relationship Auditor for Threads Web
 // @author       P Choke & MIKA
 // @match        https://www.threads.com/*
 // @match        https://threads.com/*
 // @match        https://www.threads.net/*
 // @match        https://threads.net/*
+// @icon         https://www.threads.net/favicon.ico
+// @icon64       https://www.threads.net/favicon.ico
 // @grant        GM_download
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -18,14 +20,15 @@
 // ==/UserScript==
 
 /**
- * ThreadMax v1.2.0 — Pure Vanilla JavaScript, Zero External Dependencies
+ * ThreadMax v1.4.0 — Pure Vanilla JavaScript, Zero External Dependencies
  * Architecture: Clean Modular / Anti-Slop Minimal Precision
  *
  * ponytail: deliberate simplifications:
  * - Dynamic Stacking Context Elevation (z-index: 9999 on active card): eliminates sunken dropdown bugs.
  * - IndexedDB local snapshot vault: zero network telemetry, 100% private relationship auditing.
+ * - Safe-Pacing Batch Scanner: 3,000–5,000ms randomized sleep jitter prevents account checkpoints.
  * - Text Splitter sentence-boundary chunker: <= 480 chars to ensure clean 1/N sub-posts.
- * - Viral Velocity heuristic: (Replies*2 + Reposts*1.5)/AgeMinutes for real-time engagement surge detection.
+ * - Viral Velocity heuristic: (Replies*2 + Reposts*1.5)/AgeMinutes with <50 replies guard for early surge detection.
  */
 
 (function () {
@@ -85,6 +88,50 @@
     });
   }
 
+  /* ─── 1.5 ACTIVE GRAPHQL SNIFFER ─────────────────────────── */
+  const TM_Sniffer = {
+    init: () => {
+      try {
+        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        if (win.__tm_sniffer_installed) return;
+        win.__tm_sniffer_installed = true;
+
+        const origFetch = win.fetch;
+        win.fetch = async function (...args) {
+          const url = args[0] ? String(args[0]) : '';
+          const init = args[1] || {};
+
+          if (url.includes('/api/graphql')) {
+            try {
+              const bodyStr = typeof init.body === 'string'
+                ? init.body
+                : (init.body instanceof URLSearchParams ? init.body.toString() : '');
+              const params = new URLSearchParams(bodyStr);
+              const docId = params.get('doc_id');
+              const friendlyName = params.get('fb_api_req_friendly_name') || '';
+
+              if (docId) {
+                if (friendlyName.toLowerCase().includes('follower') || bodyStr.includes('follower')) {
+                  TM_Config.set('tm_doc_followers', docId);
+                  console.info('[ThreadMax Sniffer] Captured Live Followers doc_id:', docId);
+                } else if (friendlyName.toLowerCase().includes('following') || bodyStr.includes('following')) {
+                  TM_Config.set('tm_doc_following', docId);
+                  console.info('[ThreadMax Sniffer] Captured Live Following doc_id:', docId);
+                }
+              }
+            } catch (e) {}
+          }
+
+          return origFetch.apply(this, args);
+        };
+      } catch (e) {
+        console.warn('[ThreadMax] Failed to install sniffer:', e);
+      }
+    }
+  };
+
+  TM_Sniffer.init();
+
   /* ─── 2. INDEXEDDB VAULT (Relationship Intelligence) ──────── */
   const TM_DB = {
     dbName: 'ThreadMaxDB',
@@ -109,17 +156,58 @@
       });
     },
 
+    computeRelationshipDiff: (currentFollowers, currentFollowing, prevSnapshot = null) => {
+      const followerSet = new Set((currentFollowers || []).map(u => String(u).toLowerCase()));
+      const followingSet = new Set((currentFollowing || []).map(u => String(u).toLowerCase()));
+
+      // 1. Not following back: We follow them, but they do NOT follow back
+      const notFollowingBack = (currentFollowing || []).filter(u => !followerSet.has(String(u).toLowerCase()));
+
+      // 2. Fans / Admirers: They follow us, but we do NOT follow them back
+      const fans = (currentFollowers || []).filter(u => !followingSet.has(String(u).toLowerCase()));
+
+      // 3. Mutual Friends: Both follow each other
+      const mutual = (currentFollowing || []).filter(u => followerSet.has(String(u).toLowerCase()));
+
+      // 4. Lost & Gained (relative to previous snapshot)
+      let gained = [];
+      let lost = [];
+      if (prevSnapshot && Array.isArray(prevSnapshot.followers)) {
+        const prevFollowerSet = new Set(prevSnapshot.followers.map(u => String(u).toLowerCase()));
+        gained = (currentFollowers || []).filter(u => !prevFollowerSet.has(String(u).toLowerCase()));
+        lost = prevSnapshot.followers.filter(u => !followerSet.has(String(u).toLowerCase()));
+      }
+
+      return {
+        notFollowingBack,
+        fans,
+        mutual,
+        gained,
+        lost,
+        totalFollowers: (currentFollowers || []).length,
+        totalFollowing: (currentFollowing || []).length
+      };
+    },
+
     saveSnapshot: async (data) => {
       const db = await TM_DB.init();
+      const prev = await TM_DB.getLatestSnapshot();
+      const followers = data.followers || [];
+      const following = data.following || [];
+      const diff = data.diff || TM_DB.computeRelationshipDiff(followers, following, prev);
+
       return new Promise((resolve, reject) => {
         const tx = db.transaction('snapshots', 'readwrite');
         const store = tx.objectStore('snapshots');
-        const req = store.add({
+        const record = {
           timestamp: Date.now(),
-          followers: data.followers || [],
-          following: data.following || []
-        });
-        req.onsuccess = () => resolve(req.result);
+          username: data.username || 'me',
+          followers,
+          following,
+          diff
+        };
+        const req = store.add(record);
+        req.onsuccess = () => resolve({ id: req.result, ...record });
         req.onerror = () => reject(req.error);
       });
     },
@@ -134,6 +222,17 @@
           const all = req.result;
           resolve(all && all.length > 0 ? all[all.length - 1] : null);
         };
+        req.onerror = () => reject(req.error);
+      });
+    },
+
+    getAllSnapshots: async () => {
+      const db = await TM_DB.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('snapshots', 'readonly');
+        const store = tx.objectStore('snapshots');
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
     }
@@ -975,8 +1074,8 @@
         // Velocity score: (Replies*2 + Reposts*1.5) / AgeMinutes
         const velocity = (meta.replies * 2 + meta.reposts * 1.5) / ageMinutes;
 
-        // Trigger badge if high acceleration (< 180 min age and velocity >= 0.1)
-        if (ageMinutes <= 180 && velocity >= 0.1) {
+        // Trigger badge if early high acceleration (< 180 min age, replies < 50, and velocity >= 0.1)
+        if (ageMinutes <= 180 && meta.replies < 50 && velocity >= 0.1) {
           const authorHeader = card.querySelector('a[href*="/@"]')?.parentElement || card.querySelector('time')?.parentElement;
           if (authorHeader && !authorHeader.querySelector('.tm-viral-badge')) {
             const badge = document.createElement('span');
@@ -986,6 +1085,72 @@
             badge.innerHTML = `⚡ Rising (${ratePerHour}/hr)`;
             authorHeader.appendChild(badge);
           }
+        }
+      });
+
+      TM_ViralRadar.applyFilter();
+    },
+
+    applyFilter: () => {
+      const filterActive = TM_Config.get(CONFIG_KEYS.FILTER_RISING, false);
+      const shareItems = TM_DOM.findShareButtons();
+      shareItems.forEach(shareInfo => {
+        const card = TM_DOM.findPostCard(shareInfo.actionRow);
+        if (!card) return;
+        if (filterActive) {
+          const isRising = card.querySelector('.tm-viral-badge') !== null;
+          card.style.display = isRising ? '' : 'none';
+        } else {
+          card.style.display = '';
+        }
+      });
+    },
+
+    injectFilterBar: () => {
+      if (document.getElementById('tm-feed-filter-bar')) {
+        TM_ViralRadar.updateFilterBarUI();
+        return;
+      }
+
+      // Look for the main feed container or feed column
+      const container = document.querySelector('main') || document.querySelector('[role="main"]');
+      if (!container) return;
+
+      const bar = document.createElement('div');
+      bar.id = 'tm-feed-filter-bar';
+      bar.className = 'tm-feed-filter-bar';
+      bar.innerHTML = `
+        <div class="tm-filter-pills">
+          <button type="button" class="tm-filter-pill active" data-filter="all">ทั้งหมด</button>
+          <button type="button" class="tm-filter-pill" data-filter="rising">🔥 Rising Radar</button>
+        </div>
+      `;
+
+      bar.querySelectorAll('.tm-filter-pill').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const filter = btn.dataset.filter;
+          const isRising = filter === 'rising';
+          TM_Config.set(CONFIG_KEYS.FILTER_RISING, isRising);
+          TM_ViralRadar.updateFilterBarUI();
+          TM_ViralRadar.applyFilter();
+          showToast(isRising ? '🔥 แสดงเฉพาะโพสต์เรดาร์พุ่งแรง' : 'แสดงโพสต์ทั้งหมด');
+        };
+      });
+
+      container.insertBefore(bar, container.firstChild);
+      TM_ViralRadar.updateFilterBarUI();
+    },
+
+    updateFilterBarUI: () => {
+      const bar = document.getElementById('tm-feed-filter-bar');
+      if (!bar) return;
+      const isRising = TM_Config.get(CONFIG_KEYS.FILTER_RISING, false);
+      bar.querySelectorAll('.tm-filter-pill').forEach(btn => {
+        if (btn.dataset.filter === 'rising') {
+          btn.classList.toggle('active', isRising);
+        } else {
+          btn.classList.toggle('active', !isRising);
         }
       });
     }
@@ -1223,8 +1388,613 @@
     }
   };
 
-  /* ─── 15. THREADMAX STUDIO DRAWER (Phase 3.2) ──────────────── */
+  /* ─── 15. RELATIONSHIP RADAR & MUTUAL AUDITOR (Phase 3.2) ─── */
+  const TM_RelationshipAuditor = {
+    isScanning: false,
+    abortController: null,
+
+    detectUsername: () => {
+      // 1. Check current URL if on a profile page
+      const match = window.location.pathname.match(/^\/@([^/?#]+)/);
+      if (match && !['explore', 'search', 'activity', 'messages', 'settings'].includes(match[1])) {
+        return match[1];
+      }
+      // 2. Find profile link in sidebar navigation
+      const profileLink = document.querySelector('a[href^="/@"]:not([href*="/post/"])');
+      if (profileLink) {
+        const m = (profileLink.getAttribute('href') || '').match(/@([^/?#]+)/);
+        if (m) return m[1];
+      }
+      // 3. Check avatar image link
+      const avatarLink = document.querySelector('a[href*="/@"]');
+      if (avatarLink) {
+        const m = (avatarLink.getAttribute('href') || '').match(/@([^/?#]+)/);
+        if (m) return m[1];
+      }
+      return null;
+    },
+
+    sleepJitter: (min = 3000, max = 5000) => {
+      const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+      return new Promise(resolve => setTimeout(resolve, ms));
+    },
+
+    fetchUserId: async (username) => {
+      if (!username) return null;
+      const cleanUser = String(username).replace(/^@/, '').toLowerCase().trim();
+
+      // Helper: Validate and persist numeric User ID
+      const validateAndCache = (id) => {
+        if (!id) return null;
+        const str = String(id).trim();
+        if (/^\d{4,25}$/.test(str) && str !== '0') {
+          try {
+            TM_Config.set(`tm_uid_${cleanUser}`, str);
+          } catch (e) {}
+          return str;
+        }
+        return null;
+      };
+
+      // Tier 0: Check persistent cache from previous scans
+      try {
+        const cached = TM_Config.get(`tm_uid_${cleanUser}`, null);
+        if (cached && validateAndCache(cached)) {
+          return String(cached);
+        }
+      } catch (e) {}
+
+      // Tier 1: Check document.cookie (ds_user_id) if target is the logged-in user
+      try {
+        const currentDetected = (TM_RelationshipAuditor.detectUsername() || '').toLowerCase();
+        const isSelf = !currentDetected || currentDetected === cleanUser;
+        if (isSelf) {
+          const mCookie = document.cookie.match(/(?:^|;\s*)ds_user_id=(\d+)/);
+          if (mCookie && validateAndCache(mCookie[1])) {
+            return validateAndCache(mCookie[1]);
+          }
+        }
+      } catch (e) {}
+
+      // Tier 2: Check current page DOM meta / link tags for app deep-link user ID
+      try {
+        const metaTags = document.querySelectorAll('meta[content*="user?id="], link[href*="user?id="]');
+        for (const tag of metaTags) {
+          const val = tag.getAttribute('content') || tag.getAttribute('href') || '';
+          const m = val.match(/(?:barcelona|instagram):\/\/user\?id=(\d+)/i);
+          if (m && validateAndCache(m[1])) {
+            return validateAndCache(m[1]);
+          }
+        }
+      } catch (e) {}
+
+      // Tier 3: Scan in-page <script> tags for JSON containing user ID near target username
+      try {
+        const scripts = document.querySelectorAll('script');
+        for (const s of scripts) {
+          const text = s.textContent || '';
+          if (text.includes(cleanUser)) {
+            const idx = text.indexOf(cleanUser);
+            const slice = text.substring(Math.max(0, idx - 600), Math.min(text.length, idx + 600));
+            const m = slice.match(/"(?:pk|user_id|target_user_id|profile_id)":"?(\d{4,25})"?/);
+            if (m && validateAndCache(m[1])) {
+              return validateAndCache(m[1]);
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Tier 4: Same-origin HTML fetch of the user profile page
+      try {
+        const baseOrigin = window.location.origin || 'https://www.threads.net';
+        const profileUrl = `${baseOrigin}/@${encodeURIComponent(cleanUser)}`;
+        const pageRes = await fetch(profileUrl, {
+          credentials: 'include',
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+        if (pageRes.ok) {
+          const html = await pageRes.text();
+          // Check app deep link
+          const mBarc = html.match(/(?:barcelona|instagram):\/\/user\?id=(\d+)/i);
+          if (mBarc && validateAndCache(mBarc[1])) return validateAndCache(mBarc[1]);
+
+          // Check script slice near username
+          const idx = html.indexOf(cleanUser);
+          if (idx !== -1) {
+            const slice = html.substring(Math.max(0, idx - 600), Math.min(html.length, idx + 600));
+            const m = slice.match(/"(?:pk|user_id|target_user_id|profile_id)":"?(\d{4,25})"?/);
+            if (m && validateAndCache(m[1])) return validateAndCache(m[1]);
+          }
+
+          // Check general user_id pattern
+          const mUser = html.match(/"user_id":"?(\d{4,25})"?/);
+          if (mUser && validateAndCache(mUser[1])) return validateAndCache(mUser[1]);
+        }
+      } catch (e) {}
+
+      // Tier 5: REST API endpoints (same-origin first, then alternate origin)
+      const testOrigins = [
+        window.location.origin,
+        'https://www.threads.com',
+        'https://www.threads.net'
+      ].filter((v, i, a) => v && a.indexOf(v) === i);
+
+      for (const origin of testOrigins) {
+        try {
+          const res = await fetch(`${origin}/api/v1/users/web_profile_info/?username=${encodeURIComponent(cleanUser)}`, {
+            headers: {
+              'X-IG-App-ID': '238260118658252',
+              'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'include'
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const id = json?.data?.user?.pk || json?.data?.user?.id;
+            if (id && validateAndCache(id)) return validateAndCache(id);
+          }
+        } catch (e) {}
+      }
+
+      // Tier 6: Manual input prompt fallback (with permanent cache)
+      try {
+        const manual = prompt(
+          `[ThreadMax] ไม่สามารถตรวจหา User ID ของ @${cleanUser} อัตโนมัติได้\n\nหากคุณทราบ User ID สามารถระบุตัวเลขได้ที่นี่ หรือกด Cancel:`
+        );
+        if (manual && /^\d+$/.test(manual.trim())) {
+          return validateAndCache(manual.trim());
+        }
+      } catch (e) {}
+
+      return null;
+    },
+
+    fetchGraphQLList: async (type, userId, onProgress, signal) => {
+      const baseOrigin = window.location.origin || 'https://www.threads.com';
+      const lsd = document.querySelector('input[name="lsd"]')?.value ||
+                  (typeof unsafeWindow !== 'undefined' && unsafeWindow.LSD?.token) || '';
+
+      const docId = TM_Config.get(`tm_doc_${type}`, null);
+      if (!docId) {
+        throw new Error('NO_DOC_ID');
+      }
+
+      const usernames = [];
+      let afterCursor = null;
+      let hasNext = true;
+      let page = 0;
+
+      while (hasNext && !signal.aborted) {
+        page++;
+        const variables = {
+          userID: userId,
+          first: 50,
+          after: afterCursor
+        };
+
+        const form = new URLSearchParams();
+        if (lsd) form.set('lsd', lsd);
+        form.set('variables', JSON.stringify(variables));
+        form.set('doc_id', docId);
+
+        const res = await fetch(`${baseOrigin}/api/graphql`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-IG-App-ID': '238260118658252',
+            'X-FB-LSD': lsd,
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          credentials: 'include',
+          body: form.toString(),
+          signal
+        });
+
+        if (!res.ok) {
+          throw new Error(`GRAPHQL_${res.status}`);
+        }
+
+        const json = await res.json();
+        const edgeData = type === 'followers'
+          ? (json?.data?.user?.edge_followed_by || json?.data?.viewer?.user?.edge_followed_by)
+          : (json?.data?.user?.edge_follow || json?.data?.viewer?.user?.edge_follow);
+
+        const edges = edgeData?.edges || [];
+        for (const e of edges) {
+          const u = e.node?.username;
+          if (u && !usernames.includes(u.toLowerCase())) {
+            usernames.push(u.toLowerCase());
+          }
+        }
+
+        if (typeof onProgress === 'function') {
+          onProgress(type, usernames.length, page);
+        }
+
+        hasNext = edgeData?.page_info?.has_next_page || false;
+        afterCursor = edgeData?.page_info?.end_cursor || null;
+
+        if (hasNext && !signal.aborted) {
+          await TM_RelationshipAuditor.sleepJitter(2000, 3500);
+        }
+      }
+
+      return usernames;
+    },
+
+    findScrollableContainer: (dialog) => {
+      if (!dialog) return null;
+      const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight && el.clientHeight > 120) {
+          const style = window.getComputedStyle(el);
+          if (style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflow === 'auto' || style.overflow === 'scroll') {
+            return el;
+          }
+        }
+      }
+      return dialog;
+    },
+
+    extractUsernamesFromDialog: (dialog) => {
+      if (!dialog) return [];
+      const links = Array.from(dialog.querySelectorAll('a[href*="/@"]'));
+      const found = new Set();
+      links.forEach(a => {
+        const href = a.getAttribute('href') || '';
+        if (href.includes('/post/')) return;
+        const m = href.match(/@([^/?#]+)/);
+        if (m) {
+          const u = m[1].toLowerCase();
+          if (!['post', 'explore', 'search', 'activity', 'messages', 'settings'].includes(u)) {
+            found.add(u);
+          }
+        }
+      });
+      return Array.from(found);
+    },
+
+    findAllScrollContainers: (dialog) => {
+      if (!dialog) return [];
+      const containers = new Set();
+      const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight && el.clientHeight > 80) {
+          const style = window.getComputedStyle(el);
+          if (['auto', 'scroll'].includes(style.overflowY) || ['auto', 'scroll'].includes(style.overflow)) {
+            containers.add(el);
+          }
+        }
+      }
+      return Array.from(containers).length > 0 ? Array.from(containers) : [dialog];
+    },
+
+    clickTab: (el) => {
+      if (!el) return;
+      try {
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (_) {}
+      if (typeof el.click === 'function') {
+        try { el.click(); } catch (_) {}
+      }
+    },
+
+    findModalTabs: (dialog) => {
+      if (!dialog) return { followersTab: null, followingTab: null };
+
+      const allElements = Array.from(dialog.querySelectorAll('a, div[role="tab"], div[role="button"], button, div, span'));
+      let followersTab = null;
+      let followingTab = null;
+
+      const followersRegex = /(^ผู้ติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?ผู้ติดตาม$|^followers(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?followers$)/i;
+      const followingRegex = /(^กำลังติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?กำลังติดตาม$|^following(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?following$)/i;
+
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        if (!followersTab && followersRegex.test(text)) {
+          followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
+        }
+        if (!followingTab && followingRegex.test(text)) {
+          followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
+        }
+      }
+
+      if (!followersTab || !followingTab) {
+        for (const el of allElements) {
+          const text = (el.textContent || '').trim();
+          if (!followersTab && text.includes('ผู้ติดตาม') && text.length < 40) {
+            followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
+          }
+          if (!followingTab && text.includes('กำลังติดตาม') && text.length < 40) {
+            followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
+          }
+        }
+      }
+
+      return { followersTab, followingTab };
+    },
+
+    extractNumberFromText: (str) => {
+      if (!str) return 0;
+      const s = String(str).trim();
+      const m = s.replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([kmb])?/i);
+      if (!m) return 0;
+      let num = parseFloat(m[1]);
+      const suffix = (m[2] || '').toLowerCase();
+      if (suffix === 'k') num *= 1000;
+      else if (suffix === 'm') num *= 1000000;
+      else if (suffix === 'b') num *= 1000000000;
+      return Math.round(num);
+    },
+
+    harvestSingleTab: async (dialog, tabLabel, targetCount, onProgress, signal) => {
+      const collected = new Set();
+      let stagnantCount = 0;
+      let lastCount = 0;
+      const maxStagnant = 14;
+
+      while (!signal.aborted && stagnantCount < maxStagnant) {
+        const currentBatch = TM_RelationshipAuditor.extractUsernamesFromDialog(dialog);
+        currentBatch.forEach(u => collected.add(u));
+
+        if (typeof onProgress === 'function') {
+          onProgress(collected.size, targetCount);
+        }
+
+        if (targetCount > 0 && collected.size >= targetCount) {
+          break;
+        }
+
+        if (collected.size === lastCount) {
+          stagnantCount++;
+        } else {
+          stagnantCount = 0;
+          lastCount = collected.size;
+        }
+
+        const scrollContainers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+        for (const c of scrollContainers) {
+          // If stalled for multiple cycles, gently nudge scroll up then down to wake up virtual observer
+          if (stagnantCount > 3 && stagnantCount % 3 === 0) {
+            c.scrollTop = Math.max(0, c.scrollHeight - 600);
+            c.dispatchEvent(new Event('scroll', { bubbles: true }));
+          }
+          c.scrollTop = c.scrollHeight;
+          c.dispatchEvent(new Event('scroll', { bubbles: true }));
+          c.dispatchEvent(new WheelEvent('wheel', { deltaY: 1200, bubbles: true }));
+        }
+
+        const rows = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+        if (rows.length > 0) {
+          rows[rows.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
+        }
+
+        const hasSpinner = dialog.querySelector('svg[aria-label*="Loading"], [role="progressbar"], div[class*="spinner"]');
+        const waitMs = hasSpinner ? 1100 : 750;
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+
+      return Array.from(collected);
+    },
+
+    harvestTwoWayModal: async (onProgressUpdate, signal) => {
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) return null;
+
+      const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
+
+      const followersTarget = followersTab ? TM_RelationshipAuditor.extractNumberFromText(followersTab.textContent) : 0;
+      const followingTarget = followingTab ? TM_RelationshipAuditor.extractNumberFromText(followingTab.textContent) : 0;
+
+      let followers = [];
+      let following = [];
+
+      // Phase 1: Followers
+      if (followersTab) {
+        TM_RelationshipAuditor.clickTab(followersTab);
+        await new Promise(r => setTimeout(r, 900));
+      }
+
+      onProgressUpdate({
+        status: 'harvesting',
+        text: `กำลังกวาด "ผู้ติดตาม" (เป้าหมาย: ${followersTarget > 0 ? followersTarget.toLocaleString() : 'ทั้งหมด'})... ได้ 0 คน`
+      });
+
+      followers = await TM_RelationshipAuditor.harvestSingleTab(
+        dialog,
+        'ผู้ติดตาม',
+        followersTarget,
+        (count, total) => {
+          const pct = total > 0 ? ` (${Math.min(100, Math.round((count / total) * 100))}%)` : '';
+          onProgressUpdate({
+            status: 'harvesting',
+            text: `กำลังกวาด "ผู้ติดตาม"... ได้ ${count.toLocaleString()}${total > 0 ? '/' + total.toLocaleString() : ''} คน${pct}`
+          });
+        },
+        signal
+      );
+
+      if (signal.aborted) throw new Error('Aborted');
+
+      // Phase 2: Following
+      if (followingTab) {
+        onProgressUpdate({
+          status: 'harvesting',
+          text: `กำลังสลับไปกวาด "กำลังติดตาม" (เป้าหมาย: ${followingTarget > 0 ? followingTarget.toLocaleString() : 'ทั้งหมด'})...`
+        });
+
+        TM_RelationshipAuditor.clickTab(followingTab);
+        await new Promise(r => setTimeout(r, 1200));
+
+        following = await TM_RelationshipAuditor.harvestSingleTab(
+          dialog,
+          'กำลังติดตาม',
+          followingTarget,
+          (count, total) => {
+            const pct = total > 0 ? ` (${Math.min(100, Math.round((count / total) * 100))}%)` : '';
+            onProgressUpdate({
+              status: 'harvesting',
+              text: `กำลังกวาด "กำลังติดตาม"... ได้ ${count.toLocaleString()}${total > 0 ? '/' + total.toLocaleString() : ''} คน${pct}`
+            });
+          },
+          signal
+        );
+      }
+
+      return { followers, following };
+    },
+
+    harvestFromModal: (onProgress, signal) => {
+      return TM_RelationshipAuditor.harvestTwoWayModal(onProgress, signal);
+    },
+
+    captureModalDOM: () => {
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) return [];
+      return TM_RelationshipAuditor.extractUsernamesFromDialog(dialog);
+    },
+
+    startScan: async (targetUsername, onProgressUpdate, mode = 'auto') => {
+      if (TM_RelationshipAuditor.isScanning) return;
+      TM_RelationshipAuditor.isScanning = true;
+      TM_RelationshipAuditor.abortController = new AbortController();
+      const signal = TM_RelationshipAuditor.abortController.signal;
+      const startTime = Date.now();
+
+      try {
+        const openDialog = document.querySelector('[role="dialog"]');
+
+        // MODE A: Modal Harvester (Direct or Auto if Modal is Open)
+        if (mode === 'modal' || (mode === 'auto' && openDialog)) {
+          if (!openDialog) {
+            throw new Error("ไม่พบหน้าต่างรายชื่อ: กรุณาคลิกที่ 'ผู้ติดตาม' หรือ 'กำลังติดตาม' บนหน้าโปรไฟล์ของคุณก่อน แล้วกดปุ่มนี้อีกครั้งค่ะ");
+          }
+
+          onProgressUpdate({ status: 'modal', text: 'กำลังเชื่อมต่อหน้าต่างรายชื่อบนจอ...' });
+          const modalData = await TM_RelationshipAuditor.harvestTwoWayModal(onProgressUpdate, signal);
+
+          if (!modalData || (modalData.followers.length === 0 && modalData.following.length === 0)) {
+            throw new Error('ไม่พบบัญชีในหน้าต่างที่เปิดอยู่ กรุณาเลื่อนดูให้แน่ใจว่าโหลดรายชื่อแล้วค่ะ');
+          }
+
+          const followers = modalData.followers;
+          const following = modalData.following;
+
+          const prevSnapshot = await TM_DB.getLatestSnapshot();
+          const diff = TM_DB.computeRelationshipDiff(followers, following, prevSnapshot);
+          const savedRecord = await TM_DB.saveSnapshot({
+            username: targetUsername,
+            followers,
+            following,
+            diff
+          });
+
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          onProgressUpdate({
+            status: 'done',
+            diff,
+            record: savedRecord,
+            text: `✓ กวาดสำเร็จใน ${elapsed}s (ผู้ติดตาม: ${followers.length.toLocaleString()}, กำลังติดตาม: ${following.length.toLocaleString()})`
+          });
+
+          return { followers, following, diff, savedRecord };
+        }
+
+        // MODE B: GraphQL / API Background Scan
+        let userId = await TM_RelationshipAuditor.fetchUserId(targetUsername);
+        if (!userId) {
+          throw new Error(`ไม่พบ User ID ของ @${targetUsername}`);
+        }
+
+        let following = [];
+        let followers = [];
+        let successGql = false;
+
+        try {
+          if (TM_Config.get('tm_doc_following', null)) {
+            onProgressUpdate({ status: 'following', current: 0, text: `กำลังดึง Following ผ่าน GraphQL...` });
+            following = await TM_RelationshipAuditor.fetchGraphQLList('following', userId, (t, count) => {
+              onProgressUpdate({ status: 'following', current: count, text: `กำลังสแกน Following... ได้ ${count} บัญชี` });
+            }, signal);
+
+            await TM_RelationshipAuditor.sleepJitter(2000, 3500);
+
+            onProgressUpdate({ status: 'followers', current: 0, text: `กำลังดึง Followers ผ่าน GraphQL...` });
+            followers = await TM_RelationshipAuditor.fetchGraphQLList('followers', userId, (t, count) => {
+              onProgressUpdate({ status: 'followers', current: count, text: `กำลังสแกน Followers... ได้ ${count} บัญชี` });
+            }, signal);
+
+            successGql = true;
+          }
+        } catch (gqlErr) {
+          console.warn('[ThreadMax] GraphQL execution fallback:', gqlErr);
+        }
+
+        if (!successGql) {
+          // If no doc_id or GraphQL rejected, check if modal is open to seamlessly harvest
+          const dialog = document.querySelector('[role="dialog"]');
+          if (dialog) {
+            onProgressUpdate({ status: 'modal', text: 'สลับไปกวาดรายชื่อจากหน้าต่างที่เปิดอยู่บนจอ...' });
+            const modalData = await TM_RelationshipAuditor.harvestTwoWayModal(onProgressUpdate, signal);
+            followers = (modalData && modalData.followers) || [];
+            following = (modalData && modalData.following) || [];
+          } else {
+            throw new Error(
+              `เซิร์ฟเวอร์ Threads จำกัดการดึง API ทางตรง\n\n👉 วิธีแก้ไขง่ายและปลอดภัย 100%:\nกรุณาคลิกที่ "ผู้ติดตาม 1,250 คน" บนหน้าโปรไฟล์ของคุณ เพื่อเปิดหน้าต่างรายชื่อ จากนั้นกดปุ่ม "📥 สแกนจากหน้าต่างที่เปิดอยู่" ค่ะ`
+            );
+          }
+        }
+
+        // Compute Diff
+        const prevSnapshot = await TM_DB.getLatestSnapshot();
+        const diff = TM_DB.computeRelationshipDiff(followers, following, prevSnapshot);
+
+        const savedRecord = await TM_DB.saveSnapshot({
+          username: targetUsername,
+          followers,
+          following,
+          diff
+        });
+
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        onProgressUpdate({
+          status: 'done',
+          diff,
+          record: savedRecord,
+          text: `✓ สแกนสำเร็จใน ${elapsed}s (Followers: ${followers.length}, Following: ${following.length})`
+        });
+
+        return { followers, following, diff, savedRecord };
+      } catch (err) {
+        if (err.message === 'Aborted') {
+          onProgressUpdate({ status: 'aborted', text: '⏹️ ยกเลิกการสแกนแล้ว' });
+        } else {
+          onProgressUpdate({ status: 'error', text: `⚠️ ${err.message}` });
+        }
+        throw err;
+      } finally {
+        TM_RelationshipAuditor.isScanning = false;
+        TM_RelationshipAuditor.abortController = null;
+      }
+    },
+
+    stopScan: () => {
+      if (TM_RelationshipAuditor.abortController) {
+        TM_RelationshipAuditor.abortController.abort();
+      }
+      TM_RelationshipAuditor.isScanning = false;
+    }
+  };
+
+  /* ─── 16. THREADMAX STUDIO DRAWER (Phase 3.2 UI) ───────────── */
   const TM_Studio = {
+    currentTab: 'notback',
+    activeDiff: null,
+
     injectLauncher: () => {
       if (document.getElementById('tm-studio-launcher')) return;
       const btn = document.createElement('div');
@@ -1268,25 +2038,59 @@
             <!-- TAB: MUTUAL AUDITOR -->
             <div class="tm-tab-pane active" id="pane-auditor">
               <div class="tm-auditor-stats">
-                <div class="tm-stat-card">
+                <div class="tm-stat-card" data-category="notback">
                   <div class="tm-stat-num" id="tm-stat-notback">0</div>
-                  <div class="tm-stat-label">ไม่ตามกลับ (Non-mutual)</div>
+                  <div class="tm-stat-label">ไม่ตามกลับ</div>
                 </div>
-                <div class="tm-stat-card">
+                <div class="tm-stat-card" data-category="fans">
                   <div class="tm-stat-num" id="tm-stat-fans">0</div>
-                  <div class="tm-stat-label">แฟนคลับ (Fans)</div>
+                  <div class="tm-stat-label">แฟนคลับ</div>
+                </div>
+                <div class="tm-stat-card" data-category="mutual">
+                  <div class="tm-stat-num" id="tm-stat-mutual">0</div>
+                  <div class="tm-stat-label">Mutual</div>
+                </div>
+                <div class="tm-stat-card" data-category="lost">
+                  <div class="tm-stat-num" id="tm-stat-lost">0</div>
+                  <div class="tm-stat-label">เพิ่งเลิกตาม</div>
                 </div>
               </div>
 
               <div class="tm-auditor-actions">
                 <button type="button" class="tm-btn-primary" id="tm-scan-relationships">
-                  🔄 ดึงข้อมูลความสัมพันธ์ล่าสุด
+                  🔄 สแกนความสัมพันธ์อัตโนมัติ (GraphQL/Sniffed)
                 </button>
+                <button type="button" class="tm-btn-secondary" id="tm-harvest-modal">
+                  📥 สแกนจากหน้าต่างที่เปิดอยู่ (Modal Harvester - ปลอดภัย 100%)
+                </button>
+                <button type="button" class="tm-btn-cancel" id="tm-cancel-scan" style="display:none;">
+                  ⏹️ หยุดการสแกน
+                </button>
+              </div>
+
+              <div id="tm-scan-progress-box" class="tm-scan-progress-box" style="display:none;">
+                <div class="tm-scan-status-text" id="tm-scan-status-text">กำลังสแกน...</div>
+                <div class="tm-progress-track">
+                  <div class="tm-progress-fill tm-indeterminate" id="tm-scan-progress-fill"></div>
+                </div>
+              </div>
+
+              <div class="tm-auditor-subtabs">
+                <button type="button" class="tm-subtab active" data-filter="notback">ไม่ตามกลับ (<span id="cnt-notback">0</span>)</button>
+                <button type="button" class="tm-subtab" data-filter="fans">แฟนคลับ (<span id="cnt-fans">0</span>)</button>
+                <button type="button" class="tm-subtab" data-filter="mutual">Mutual (<span id="cnt-mutual">0</span>)</button>
+                <button type="button" class="tm-subtab" data-filter="lost">Lost (<span id="cnt-lost">0</span>)</button>
+                <button type="button" class="tm-subtab" data-filter="gained">Gained (<span id="cnt-gained">0</span>)</button>
+              </div>
+
+              <div class="tm-auditor-toolbar">
+                <input type="text" id="tm-auditor-search" class="tm-search-input" placeholder="🔍 ค้นหาชื่อบัญชี..." />
+                <button type="button" class="tm-btn-sub" id="tm-copy-auditor-list" title="คัดลอกรายชื่อทั้งหมดในมุมมองนี้">📋 คัดลอก</button>
               </div>
 
               <div class="tm-auditor-list" id="tm-auditor-list">
                 <div class="tm-empty-state">
-                  เปิดหน้าโปรไฟล์ของคุณแล้วกด "ดึงข้อมูลความสัมพันธ์ล่าสุด" เพื่อเริ่มต้นสแกนสถานะ
+                  กดปุ่ม "สแกนความสัมพันธ์ล่าสุด" เพื่อเริ่มต้นตรวจสอบสถานะความสัมพันธ์อย่างปลอดภัย
                 </div>
               </div>
             </div>
@@ -1319,9 +2123,17 @@
               <div class="tm-setting-row">
                 <div>
                   <div class="tm-setting-title">Viral Velocity Radar</div>
-                  <div class="tm-setting-desc">ติดป้าย ⚡ Rising บนโพสต์ที่กำลังมีอัตราเร่งสูง</div>
+                  <div class="tm-setting-desc">ติดป้าย ⚡ Rising บนโพสต์ที่กำลังมีอัตราเร่งสูง (< 50 คอมเมนต์)</div>
                 </div>
                 <input type="checkbox" id="tm-opt-viral" class="tm-checkbox" />
+              </div>
+
+              <div class="tm-setting-row">
+                <div>
+                  <div class="tm-setting-title">Rising Radar Feed Filter</div>
+                  <div class="tm-setting-desc">กรองฟีดแสดงเฉพาะโพสต์เรดาร์พุ่งแรง</div>
+                </div>
+                <input type="checkbox" id="tm-opt-filter-rising" class="tm-checkbox" />
               </div>
             </div>
           </div>
@@ -1363,9 +2175,166 @@
         showToast('✓ บันทึกการตั้งค่าแล้ว');
       };
 
+      const filterRisingCheck = drawer.querySelector('#tm-opt-filter-rising');
+      filterRisingCheck.checked = TM_Config.get(CONFIG_KEYS.FILTER_RISING, false);
+      filterRisingCheck.onchange = () => {
+        TM_Config.set(CONFIG_KEYS.FILTER_RISING, filterRisingCheck.checked);
+        TM_ViralRadar.updateFilterBarUI();
+        TM_ViralRadar.applyFilter();
+        showToast('✓ บันทึกการตั้งค่าแล้ว');
+      };
+
+      // Load latest snapshot from IndexedDB
+      const latestSnapshot = await TM_DB.getLatestSnapshot();
+      if (latestSnapshot && latestSnapshot.diff) {
+        TM_Studio.activeDiff = latestSnapshot.diff;
+        TM_Studio.renderAuditorData(drawer, latestSnapshot.diff);
+      }
+
+      // Auditor Sub-tabs click
+      drawer.querySelectorAll('.tm-subtab').forEach(tab => {
+        tab.onclick = () => {
+          drawer.querySelectorAll('.tm-subtab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          TM_Studio.currentTab = tab.dataset.filter;
+          TM_Studio.renderAuditorList(drawer);
+        };
+      });
+
+      // Search input filter
+      const searchInput = drawer.querySelector('#tm-auditor-search');
+      searchInput.oninput = () => TM_Studio.renderAuditorList(drawer);
+
+      // Copy list button
+      drawer.querySelector('#tm-copy-auditor-list').onclick = () => {
+        const list = TM_Studio.getCurrentFilteredUsers(drawer);
+        if (list.length === 0) {
+          showToast('⚠️ ไม่มีรายชื่อให้คัดลอก');
+          return;
+        }
+        const text = list.map(u => `@${u}`).join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+          showToast(`✓ คัดลอก ${list.length} บัญชีแล้ว`);
+        });
+      };
+
+      // Scan buttons
+      const scanBtn = drawer.querySelector('#tm-scan-relationships');
+      const harvestBtn = drawer.querySelector('#tm-harvest-modal');
+      const cancelBtn = drawer.querySelector('#tm-cancel-scan');
+      const progressBox = drawer.querySelector('#tm-scan-progress-box');
+      const statusText = drawer.querySelector('#tm-scan-status-text');
+
+      const triggerScan = async (mode) => {
+        const username = TM_RelationshipAuditor.detectUsername() || prompt('กรุณาระบุ Username ของคุณ (เช่น choke.dev):');
+        if (!username) return;
+
+        scanBtn.style.display = 'none';
+        if (harvestBtn) harvestBtn.style.display = 'none';
+        cancelBtn.style.display = 'inline-block';
+        progressBox.style.display = 'block';
+
+        try {
+          const result = await TM_RelationshipAuditor.startScan(username, (progress) => {
+            statusText.textContent = progress.text;
+            if (progress.status === 'done') {
+              showToast('✓ สแกนความสัมพันธ์เรียบร้อย');
+            }
+          }, mode);
+
+          if (result && result.diff) {
+            TM_Studio.activeDiff = result.diff;
+            TM_Studio.renderAuditorData(drawer, result.diff);
+          }
+        } catch (err) {
+          if (err.message !== 'Aborted') {
+            showToast(`⚠️ การสแกนล้มเหลว: ${err.message}`);
+          }
+        } finally {
+          scanBtn.style.display = 'inline-block';
+          if (harvestBtn) harvestBtn.style.display = 'inline-block';
+          cancelBtn.style.display = 'none';
+          setTimeout(() => { progressBox.style.display = 'none'; }, 3000);
+        }
+      };
+
+      scanBtn.onclick = () => triggerScan('auto');
+      if (harvestBtn) harvestBtn.onclick = () => triggerScan('modal');
+
+      cancelBtn.onclick = () => {
+        TM_RelationshipAuditor.stopScan();
+        showToast('⏹️ ยกเลิกการสแกน');
+      };
+
       // Close handlers
       drawer.querySelector('#tm-close-drawer').onclick = () => drawer.remove();
       drawer.querySelector('.tm-drawer-overlay').onclick = () => drawer.remove();
+    },
+
+    renderAuditorData: (drawer, diff) => {
+      if (!diff) return;
+      drawer.querySelector('#tm-stat-notback').textContent = (diff.notFollowingBack || []).length;
+      drawer.querySelector('#tm-stat-fans').textContent = (diff.fans || []).length;
+      drawer.querySelector('#tm-stat-mutual').textContent = (diff.mutual || []).length;
+      drawer.querySelector('#tm-stat-lost').textContent = (diff.lost || []).length;
+
+      drawer.querySelector('#cnt-notback').textContent = (diff.notFollowingBack || []).length;
+      drawer.querySelector('#cnt-fans').textContent = (diff.fans || []).length;
+      drawer.querySelector('#cnt-mutual').textContent = (diff.mutual || []).length;
+      drawer.querySelector('#cnt-lost').textContent = (diff.lost || []).length;
+      drawer.querySelector('#cnt-gained').textContent = (diff.gained || []).length;
+
+      TM_Studio.renderAuditorList(drawer);
+    },
+
+    getCurrentFilteredUsers: (drawer) => {
+      const diff = TM_Studio.activeDiff;
+      if (!diff) return [];
+      let source = [];
+      if (TM_Studio.currentTab === 'notback') source = diff.notFollowingBack || [];
+      else if (TM_Studio.currentTab === 'fans') source = diff.fans || [];
+      else if (TM_Studio.currentTab === 'mutual') source = diff.mutual || [];
+      else if (TM_Studio.currentTab === 'lost') source = diff.lost || [];
+      else if (TM_Studio.currentTab === 'gained') source = diff.gained || [];
+
+      const query = (drawer.querySelector('#tm-auditor-search')?.value || '').trim().toLowerCase();
+      if (!query) return source;
+      return source.filter(u => u.toLowerCase().includes(query));
+    },
+
+    renderAuditorList: (drawer) => {
+      const listContainer = drawer.querySelector('#tm-auditor-list');
+      if (!listContainer) return;
+      const users = TM_Studio.getCurrentFilteredUsers(drawer);
+
+      if (users.length === 0) {
+        listContainer.innerHTML = '<div class="tm-empty-state">ไม่พบบัญชีในหมวดหมู่นี้</div>';
+        return;
+      }
+
+      listContainer.innerHTML = `
+        <div class="tm-user-rows">
+          ${users.map(u => `
+            <div class="tm-user-row">
+              <a class="tm-user-link" href="https://www.threads.net/@${u}" target="_blank" rel="noopener">
+                <span class="tm-user-avatar">👤</span>
+                <span class="tm-user-name">@${escapeHtml(u)}</span>
+              </a>
+              <button type="button" class="tm-copy-user-btn tm-btn-sub" data-user="${escapeHtml(u)}" title="คัดลอกชื่อ">📋</button>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      listContainer.querySelectorAll('.tm-copy-user-btn').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const u = btn.dataset.user;
+          navigator.clipboard.writeText(`@${u}`).then(() => {
+            showToast(`✓ คัดลอก @${u}`);
+          });
+        };
+      });
     }
   };
 
@@ -1859,10 +2828,28 @@
       }
       .tm-auditor-actions {
         margin-bottom: 16px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 8px !important;
       }
       .tm-auditor-actions button {
         width: 100% !important;
         padding: 10px !important;
+      }
+      .tm-btn-secondary {
+        background: #202020 !important;
+        color: #e4e6eb !important;
+        border: 1px solid #333333 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 13px !important;
+        cursor: pointer !important;
+        transition: all 140ms ease !important;
+      }
+      .tm-btn-secondary:hover {
+        background: #282828 !important;
+        border-color: #0095f6 !important;
+        color: #ffffff !important;
       }
       .tm-empty-state {
         text-align: center !important;
@@ -1928,6 +2915,152 @@
         opacity: 1 !important;
         transform: translateX(-50%) translateY(0) !important;
       }
+
+      /* Feed Top Filter Bar */
+      .tm-feed-filter-bar {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 8px 16px !important;
+        margin: 0 auto 12px auto !important;
+        max-width: 620px !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        z-index: 100 !important;
+      }
+      .tm-filter-pills {
+        display: flex !important;
+        background: #181818 !important;
+        border: 1px solid #282828 !important;
+        border-radius: 20px !important;
+        padding: 3px !important;
+        gap: 4px !important;
+      }
+      .tm-filter-pill {
+        background: transparent !important;
+        color: #888888 !important;
+        border: none !important;
+        padding: 5px 14px !important;
+        border-radius: 16px !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        transition: all 140ms ease !important;
+      }
+      .tm-filter-pill:hover {
+        color: #ffffff !important;
+      }
+      .tm-filter-pill.active {
+        background: #282828 !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4) !important;
+      }
+
+      /* Auditor Progress Box & Subtabs */
+      .tm-scan-progress-box {
+        background: #181818 !important;
+        border: 1px solid #282828 !important;
+        border-radius: 8px !important;
+        padding: 12px 14px !important;
+        margin-bottom: 16px !important;
+      }
+      .tm-scan-status-text {
+        font-size: 12px !important;
+        color: #0095f6 !important;
+        font-weight: 600 !important;
+        margin-bottom: 8px !important;
+      }
+      .tm-indeterminate {
+        animation: tmIndeterminate 1.4s infinite linear !important;
+      }
+      @keyframes tmIndeterminate {
+        0% { transform: translateX(-100%); width: 30%; }
+        50% { transform: translateX(50%); width: 60%; }
+        100% { transform: translateX(200%); width: 30%; }
+      }
+      .tm-auditor-subtabs {
+        display: flex !important;
+        gap: 6px !important;
+        overflow-x: auto !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 12px !important;
+      }
+      .tm-subtab {
+        background: #1a1a1a !important;
+        border: 1px solid #282828 !important;
+        border-radius: 16px !important;
+        padding: 5px 12px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        color: #888888 !important;
+        cursor: pointer !important;
+        white-space: nowrap !important;
+        transition: all 120ms ease !important;
+      }
+      .tm-subtab:hover {
+        color: #ffffff !important;
+        border-color: #383838 !important;
+      }
+      .tm-subtab.active {
+        background: #0095f6 !important;
+        color: #ffffff !important;
+        border-color: #0095f6 !important;
+      }
+      .tm-auditor-toolbar {
+        display: flex !important;
+        gap: 8px !important;
+        margin-bottom: 14px !important;
+      }
+      .tm-search-input {
+        flex: 1 !important;
+        background: #181818 !important;
+        border: 1px solid #2a2a2a !important;
+        border-radius: 6px !important;
+        padding: 6px 12px !important;
+        font-size: 12px !important;
+        color: #ffffff !important;
+        outline: none !important;
+      }
+      .tm-search-input:focus {
+        border-color: #0095f6 !important;
+      }
+      .tm-user-rows {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 6px !important;
+      }
+      .tm-user-row {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 8px 12px !important;
+        background: #181818 !important;
+        border: 1px solid #242424 !important;
+        border-radius: 8px !important;
+        transition: background 120ms ease !important;
+      }
+      .tm-user-row:hover {
+        background: #202020 !important;
+      }
+      .tm-user-link {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        text-decoration: none !important;
+        color: #e4e6eb !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+      }
+      .tm-user-link:hover {
+        color: #0095f6 !important;
+      }
+      .tm-user-avatar {
+        font-size: 14px !important;
+      }
+      .tm-copy-user-btn {
+        padding: 3px 8px !important;
+        font-size: 11px !important;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -1943,6 +3076,7 @@
       });
       TM_Video.init();
       TM_Timestamp.updateAll();
+      TM_ViralRadar.injectFilterBar();
       TM_ViralRadar.scan();
       TM_Composer.init();
       TM_Studio.injectLauncher();
@@ -1965,7 +3099,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    console.info('[ThreadMax] v1.2.0 initialized successfully');
+    console.info('[ThreadMax] v1.4.0 initialized successfully');
   }
 
   if (document.readyState === 'loading') {

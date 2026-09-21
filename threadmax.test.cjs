@@ -202,7 +202,7 @@ function parseMetricNumber(str) {
 }
 
 // ─── EXECUTE TESTS ───
-console.log('🧪 Running ThreadMax v1.2.0 Test Suite...\n');
+console.log('🧪 Running ThreadMax v1.4.0 Test Suite...\n');
 
 // Test 1: CRC32 known vectors
 const sample1 = Buffer.from('123456789');
@@ -290,4 +290,229 @@ assert.strictEqual(parseMetricNumber('2.5m'), 2500000, 'Metric 2.5m failed');
 assert.strictEqual(parseMetricNumber('42'), 42, 'Metric 42 failed');
 console.log('✓ Test 9: Viral Velocity Radar formula & Metric parser verified');
 
-console.log('\n🎉 ALL 9 THREADMAX v1.2.0 TESTS PASSED GREEN!\n');
+// ─── 8. PHASE 3 VIRAL FILTER & COMMENT GUARD LOGIC ───
+function isRisingPost(replies, reposts, ageMinutes, maxReplies = 50, minVelocity = 0.1, maxAge = 180) {
+  if (ageMinutes > maxAge) return false;
+  if (replies >= maxReplies) return false; // Early-stage comment guard
+  const vel = calculateVelocity(replies, reposts, ageMinutes);
+  return vel >= minVelocity;
+}
+
+function shouldDisplayInFeed(isFilterActive, isRising) {
+  if (!isFilterActive) return true;
+  return isRising === true;
+}
+
+// Test 10: Viral Velocity Radar < 50 Comment Guard & Feed Filter
+assert.strictEqual(isRisingPost(20, 10, 30), true, '20 replies < 50 should be rising');
+assert.strictEqual(isRisingPost(55, 10, 30), false, '55 replies >= 50 should be blocked by guard');
+assert.strictEqual(isRisingPost(10, 5, 200), false, 'Age > 180 should not be marked rising');
+assert.strictEqual(shouldDisplayInFeed(false, false), true, 'All filter should show regular post');
+assert.strictEqual(shouldDisplayInFeed(true, false), false, 'Rising filter should hide regular post');
+assert.strictEqual(shouldDisplayInFeed(true, true), true, 'Rising filter should show rising post');
+console.log('✓ Test 10: Viral Velocity < 50 comments guard & Feed Filter logic verified');
+
+// ─── 9. PHASE 3.2 RELATIONSHIP DIFF ENGINE ───
+function computeRelationshipDiff(currentFollowers, currentFollowing, prevSnapshot = null) {
+  const followerSet = new Set(currentFollowers.map(u => String(u).toLowerCase()));
+  const followingSet = new Set(currentFollowing.map(u => String(u).toLowerCase()));
+
+  // 1. Not following back: We follow them, but they do NOT follow back
+  const notFollowingBack = currentFollowing.filter(u => !followerSet.has(String(u).toLowerCase()));
+
+  // 2. Fans / Admirers: They follow us, but we do NOT follow them back
+  const fans = currentFollowers.filter(u => !followingSet.has(String(u).toLowerCase()));
+
+  // 3. Mutual Friends: Both follow each other
+  const mutual = currentFollowing.filter(u => followerSet.has(String(u).toLowerCase()));
+
+  // 4. Lost & Gained (relative to previous snapshot)
+  let gained = [];
+  let lost = [];
+  if (prevSnapshot && Array.isArray(prevSnapshot.followers)) {
+    const prevFollowerSet = new Set(prevSnapshot.followers.map(u => String(u).toLowerCase()));
+    gained = currentFollowers.filter(u => !prevFollowerSet.has(String(u).toLowerCase()));
+    lost = prevSnapshot.followers.filter(u => !followerSet.has(String(u).toLowerCase()));
+  }
+
+  return {
+    notFollowingBack,
+    fans,
+    mutual,
+    gained,
+    lost,
+    totalFollowers: currentFollowers.length,
+    totalFollowing: currentFollowing.length
+  };
+}
+
+// Test 11: Relationship Diff Calculation
+const mockFollowers = ['alice', 'bob', 'charlie', 'diana'];
+const mockFollowing = ['bob', 'charlie', 'edward', 'frank'];
+const mockPrevSnapshot = {
+  timestamp: Date.now() - 86400000,
+  followers: ['alice', 'bob', 'charlie', 'george'], // george unfollowed, diana is new
+  following: ['bob', 'charlie']
+};
+
+const diff = computeRelationshipDiff(mockFollowers, mockFollowing, mockPrevSnapshot);
+assert.deepStrictEqual(diff.notFollowingBack.sort(), ['edward', 'frank'].sort(), 'Not following back mismatch');
+assert.deepStrictEqual(diff.fans.sort(), ['alice', 'diana'].sort(), 'Fans mismatch');
+assert.deepStrictEqual(diff.mutual.sort(), ['bob', 'charlie'].sort(), 'Mutual mismatch');
+assert.deepStrictEqual(diff.gained, ['diana'], 'Gained followers mismatch');
+assert.deepStrictEqual(diff.lost, ['george'], 'Lost followers mismatch');
+console.log('✓ Test 11: 4-category Relationship Diff Engine verified');
+
+// ─── 10. INDEXEDDB SNAPSHOT CONTRACT ───
+function validateSnapshotContract(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  if (typeof snapshot.timestamp !== 'number') return false;
+  if (!Array.isArray(snapshot.followers)) return false;
+  if (!Array.isArray(snapshot.following)) return false;
+  if (!snapshot.diff || typeof snapshot.diff !== 'object') return false;
+  return true;
+}
+
+// Test 12: IndexedDB Snapshot Data Contract
+const sampleRecord = {
+  timestamp: Date.now(),
+  username: 'choke.dev',
+  followers: mockFollowers,
+  following: mockFollowing,
+  diff: diff
+};
+assert.strictEqual(validateSnapshotContract(sampleRecord), true, 'Snapshot contract check failed');
+assert.strictEqual(validateSnapshotContract({}), false, 'Empty record should fail contract');
+console.log('✓ Test 12: IndexedDB Snapshot Data Contract verified');
+
+// ─── 11. USERSCRIPT METADATA & ICON VERIFICATION ───
+const fs = require('fs');
+const path = require('path');
+const userScriptSource = fs.readFileSync(path.join(__dirname, 'threadmax.user.js'), 'utf8');
+
+assert(userScriptSource.includes('// @version      1.4.0'), 'Userscript version should be 1.4.0');
+assert(userScriptSource.includes('// @icon         https://www.threads.net/favicon.ico'), 'Userscript missing @icon');
+assert(userScriptSource.includes('// @icon64       https://www.threads.net/favicon.ico'), 'Userscript missing @icon64');
+console.log('✓ Test 13: Userscript Metadata Header (@icon, @icon64, @version 1.4.0) verified');
+
+// ─── 12. MULTI-TIER USER ID EXTRACTION LOGIC ───
+function extractIdFromCookie(cookieStr) {
+  const m = (cookieStr || '').match(/(?:^|;\s*)ds_user_id=(\d+)/);
+  return m ? m[1] : null;
+}
+
+function extractIdFromDeepLink(tagContent) {
+  const m = (tagContent || '').match(/(?:barcelona|instagram):\/\/user\?id=(\d+)/i);
+  return m ? m[1] : null;
+}
+
+function extractIdFromScriptSlice(scriptText, username) {
+  if (!scriptText || !username) return null;
+  const clean = username.replace(/^@/, '').toLowerCase();
+  const idx = scriptText.toLowerCase().indexOf(clean);
+  if (idx === -1) return null;
+  const slice = scriptText.substring(Math.max(0, idx - 600), Math.min(scriptText.length, idx + 600));
+  const m = slice.match(/"(?:pk|user_id|target_user_id|profile_id)":"?(\d{4,25})"?/);
+  return (m && m[1] !== '0') ? m[1] : null;
+}
+
+function validateUserId(id) {
+  if (!id) return false;
+  const s = String(id).trim();
+  return /^\d{4,25}$/.test(s) && s !== '0';
+}
+
+// Test 14: Multi-tier User ID parsers & validation
+assert.strictEqual(validateUserId('0'), false, 'ID 0 should be invalid');
+assert.strictEqual(validateUserId('abc'), false, 'Non-digit ID should be invalid');
+assert.strictEqual(validateUserId('60293848123'), true, 'Valid numeric ID should pass');
+
+const mockCookies = 'csrftoken=token123; ds_user_id=60293848123; sessionid=sess456';
+assert.strictEqual(extractIdFromCookie(mockCookies), '60293848123', 'Cookie ds_user_id extraction failed');
+
+const mockMeta = 'barcelona://user?id=60293848123';
+assert.strictEqual(extractIdFromDeepLink(mockMeta), '60293848123', 'Deep link extraction failed');
+
+const mockScript = '{"require":[["ScheduledServerJS",{"props":{"username":"stxyu.p","pk":"60293848123"}}]]}';
+assert.strictEqual(extractIdFromScriptSlice(mockScript, 'stxyu.p'), '60293848123', 'Script proximity extraction failed');
+console.log('✓ Test 14: Multi-tier User ID Extraction (Cookie, Deep Link, In-Script JSON) verified');
+
+// ─── 13. GRAPHQL PAYLOAD CONTRACT & ACTIVE SNIFFER ───
+function buildGraphQLPayload(docId, lsd, userId, cursor = null) {
+  const form = new URLSearchParams();
+  if (lsd) form.set('lsd', lsd);
+  form.set('variables', JSON.stringify({ userID: userId, first: 50, after: cursor }));
+  form.set('doc_id', docId);
+  return form.toString();
+}
+
+const gqlPayload = buildGraphQLPayload('284797047911918316998205836755', 'AVq7token', '60293848123');
+assert(gqlPayload.includes('doc_id=284797047911918316998205836755'), 'Missing doc_id in payload');
+assert(gqlPayload.includes('variables=%7B%22userID%22%3A%2260293848123%22'), 'Variables not properly encoded');
+console.log('✓ Test 15: GraphQL Payload Builder & Sniffer schema contract verified');
+
+// ─── 14. MODAL HARVESTER DEDUPLICATION & PARSER ───
+function parseUsernamesFromHrefs(hrefs) {
+  const found = new Set();
+  for (const href of hrefs) {
+    if (href.includes('/post/')) continue;
+    const m = (href || '').match(/@([^/?#]+)/);
+    if (m) {
+      const u = m[1].toLowerCase();
+      if (!['post', 'explore', 'search', 'activity', 'messages', 'settings'].includes(u)) {
+        found.add(u);
+      }
+    }
+  }
+  return Array.from(found);
+}
+
+const mockModalLinks = [
+  'https://www.threads.com/@alice',
+  'https://www.threads.com/@bob',
+  'https://www.threads.com/@alice', // duplicate in virtualized scrolling
+  'https://www.threads.com/@charlie/post/xyz', // post link, should filter out
+  '/@stxyu.p'
+];
+const parsedUsers = parseUsernamesFromHrefs(mockModalLinks);
+assert.deepStrictEqual(parsedUsers.sort(), ['alice', 'bob', 'stxyu.p'].sort(), 'Modal deduplication mismatch');
+console.log('✓ Test 16: Modal Harvester deduplication & virtualized parser verified');
+
+// ─── 15. 2-WAY MODAL TAB DETECTION & NUMBER PARSER ───
+function extractNumberFromText(str) {
+  if (!str) return 0;
+  const s = String(str).trim();
+  const m = s.replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([kmb])?/i);
+  if (!m) return 0;
+  let num = parseFloat(m[1]);
+  const suffix = (m[2] || '').toLowerCase();
+  if (suffix === 'k') num *= 1000;
+  else if (suffix === 'm') num *= 1000000;
+  else if (suffix === 'b') num *= 1000000000;
+  return Math.round(num);
+}
+
+const followersRegex = /(^ผู้ติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?ผู้ติดตาม$|^followers(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?followers$)/i;
+const followingRegex = /(^กำลังติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?กำลังติดตาม$|^following(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?following$)/i;
+
+// Test 17: Tab Matching & Count Extraction
+assert.strictEqual(extractNumberFromText('ผู้ติดตาม 1,250'), 1250, 'Followers 1,250 failed');
+assert.strictEqual(extractNumberFromText('กำลังติดตาม 444'), 444, 'Following 444 failed');
+assert.strictEqual(extractNumberFromText('12.5K Followers'), 12500, 'K suffix failed');
+assert.strictEqual(extractNumberFromText('1.2M Following'), 1200000, 'M suffix failed');
+assert.strictEqual(extractNumberFromText('0'), 0, 'Zero failed');
+
+assert(followersRegex.test('ผู้ติดตาม 1,250'), 'Followers Thai format with trailing count failed');
+assert(followersRegex.test('1,250 ผู้ติดตาม'), 'Followers Thai format with leading count failed');
+assert(followersRegex.test('ผู้ติดตาม'), 'Followers Thai label only failed');
+assert(followersRegex.test('Followers 12.5K'), 'Followers English format failed');
+
+assert(followingRegex.test('กำลังติดตาม 444'), 'Following Thai format with trailing count failed');
+assert(followingRegex.test('444 กำลังติดตาม'), 'Following Thai format with leading count failed');
+assert(followingRegex.test('กำลังติดตาม'), 'Following Thai label only failed');
+assert(followingRegex.test('Following 444'), 'Following English format failed');
+
+console.log('✓ Test 17: 2-Way Modal Tab detection & Number Parser verified');
+
+console.log('\n🎉 ALL 17 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+

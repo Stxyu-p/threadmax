@@ -1659,15 +1659,30 @@
     findAllScrollContainers: (dialog) => {
       if (!dialog) return [];
       const containers = new Set();
-      const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
-      for (const el of all) {
-        if (el.scrollHeight > el.clientHeight && el.clientHeight > 80) {
-          const style = window.getComputedStyle(el);
-          if (['auto', 'scroll'].includes(style.overflowY) || ['auto', 'scroll'].includes(style.overflow)) {
+
+      // Priority 1: Trace upward from any rendered user account link
+      const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+      for (const a of links) {
+        let p = a.parentElement;
+        while (p && p !== dialog && p !== document.body) {
+          if (p.scrollHeight > p.clientHeight + 10 && p.clientHeight > 60) {
+            containers.add(p);
+          }
+          p = p.parentElement;
+        }
+        if (containers.size > 0) break;
+      }
+
+      // Priority 2: Check all descendant elements in dialog that have scrollable overflow
+      if (containers.size === 0) {
+        const all = Array.from(dialog.querySelectorAll('*'));
+        for (const el of all) {
+          if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 60) {
             containers.add(el);
           }
         }
       }
+
       return Array.from(containers).length > 0 ? Array.from(containers) : [dialog];
     },
 
@@ -1735,7 +1750,7 @@
       const collected = new Set();
       let stagnantCount = 0;
       let lastCount = 0;
-      const maxStagnant = 14;
+      const maxStagnant = 12;
 
       while (!signal.aborted && stagnantCount < maxStagnant) {
         const currentBatch = TM_RelationshipAuditor.extractUsernamesFromDialog(dialog);
@@ -1757,24 +1772,50 @@
         }
 
         const scrollContainers = TM_RelationshipAuditor.findAllScrollContainers(dialog);
+
+        // Step A: Pull back slightly (250px) so bottom sentinel exits the viewport threshold
         for (const c of scrollContainers) {
-          // If stalled for multiple cycles, gently nudge scroll up then down to wake up virtual observer
-          if (stagnantCount > 3 && stagnantCount % 3 === 0) {
-            c.scrollTop = Math.max(0, c.scrollHeight - 600);
-            c.dispatchEvent(new Event('scroll', { bubbles: true }));
-          }
+          c.scrollTop = Math.max(0, c.scrollHeight - c.clientHeight - 250);
+          c.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+
+        await new Promise(r => setTimeout(r, 120));
+
+        // Step B: Push down to bottom so sentinel re-enters threshold and fires IntersectionObserver
+        for (const c of scrollContainers) {
           c.scrollTop = c.scrollHeight;
           c.dispatchEvent(new Event('scroll', { bubbles: true }));
-          c.dispatchEvent(new WheelEvent('wheel', { deltaY: 1200, bubbles: true }));
+
+          const rect = c.getBoundingClientRect();
+          c.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: 800,
+            deltaMode: 0,
+            bubbles: true,
+            cancelable: true,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2
+          }));
         }
 
+        // Step C: Scroll the last rendered user row into view
         const rows = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
         if (rows.length > 0) {
-          rows[rows.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
+          const lastRow = rows[rows.length - 1];
+          try {
+            lastRow.scrollIntoView({ behavior: 'instant', block: 'end' });
+          } catch (_) {}
+
+          const p = lastRow.closest('div[style*="height"], div[role="listitem"], li') || lastRow.parentElement;
+          if (p && p.parentElement && p.parentElement.lastElementChild) {
+            try {
+              p.parentElement.lastElementChild.scrollIntoView({ behavior: 'instant', block: 'end' });
+            } catch (_) {}
+          }
         }
 
+        // Step D: Dynamic Wait time for Threads GraphQL network response
         const hasSpinner = dialog.querySelector('svg[aria-label*="Loading"], [role="progressbar"], div[class*="spinner"]');
-        const waitMs = hasSpinner ? 1100 : 750;
+        const waitMs = hasSpinner ? 1600 : 1200;
         await new Promise(r => setTimeout(r, waitMs));
       }
 
@@ -2057,11 +2098,8 @@
               </div>
 
               <div class="tm-auditor-actions">
-                <button type="button" class="tm-btn-primary" id="tm-scan-relationships">
-                  🔄 สแกนความสัมพันธ์อัตโนมัติ (GraphQL/Sniffed)
-                </button>
-                <button type="button" class="tm-btn-secondary" id="tm-harvest-modal">
-                  📥 สแกนจากหน้าต่างที่เปิดอยู่ (Modal Harvester - ปลอดภัย 100%)
+                <button type="button" class="tm-btn-primary" id="tm-harvest-modal">
+                  📥 สแกนความสัมพันธ์ (จากหน้าต่างที่เปิดอยู่)
                 </button>
                 <button type="button" class="tm-btn-cancel" id="tm-cancel-scan" style="display:none;">
                   ⏹️ หยุดการสแกน
@@ -2218,19 +2256,23 @@
         });
       };
 
-      // Scan buttons
-      const scanBtn = drawer.querySelector('#tm-scan-relationships');
+      // Scan button
       const harvestBtn = drawer.querySelector('#tm-harvest-modal');
       const cancelBtn = drawer.querySelector('#tm-cancel-scan');
       const progressBox = drawer.querySelector('#tm-scan-progress-box');
       const statusText = drawer.querySelector('#tm-scan-status-text');
 
-      const triggerScan = async (mode) => {
+      const triggerScan = async () => {
         const username = TM_RelationshipAuditor.detectUsername() || prompt('กรุณาระบุ Username ของคุณ (เช่น choke.dev):');
         if (!username) return;
 
-        scanBtn.style.display = 'none';
-        if (harvestBtn) harvestBtn.style.display = 'none';
+        const openDialog = document.querySelector('[role="dialog"]');
+        if (!openDialog) {
+          showToast('⚠️ กรุณาคลิก "ผู้ติดตาม" หรือ "กำลังติดตาม" บนหน้าโปรไฟล์ก่อนกดสแกนค่ะ');
+          return;
+        }
+
+        harvestBtn.style.display = 'none';
         cancelBtn.style.display = 'inline-block';
         progressBox.style.display = 'block';
 
@@ -2240,7 +2282,7 @@
             if (progress.status === 'done') {
               showToast('✓ สแกนความสัมพันธ์เรียบร้อย');
             }
-          }, mode);
+          }, 'modal');
 
           if (result && result.diff) {
             TM_Studio.activeDiff = result.diff;
@@ -2251,15 +2293,13 @@
             showToast(`⚠️ การสแกนล้มเหลว: ${err.message}`);
           }
         } finally {
-          scanBtn.style.display = 'inline-block';
-          if (harvestBtn) harvestBtn.style.display = 'inline-block';
+          harvestBtn.style.display = 'inline-block';
           cancelBtn.style.display = 'none';
           setTimeout(() => { progressBox.style.display = 'none'; }, 3000);
         }
       };
 
-      scanBtn.onclick = () => triggerScan('auto');
-      if (harvestBtn) harvestBtn.onclick = () => triggerScan('modal');
+      if (harvestBtn) harvestBtn.onclick = () => triggerScan();
 
       cancelBtn.onclick = () => {
         TM_RelationshipAuditor.stopScan();

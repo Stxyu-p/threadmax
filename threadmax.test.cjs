@@ -514,5 +514,39 @@ assert(followingRegex.test('Following 444'), 'Following English format failed');
 
 console.log('✓ Test 17: 2-Way Modal Tab detection & Number Parser verified');
 
-console.log('\n🎉 ALL 17 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 16. UPWARD CONTAINER RESOLUTION & THRESHOLD-CROSSING SCROLLER ───
+function resolveScrollContainer(startNode, boundaryNode) {
+  let curr = startNode ? startNode.parentElement : null;
+  while (curr && curr !== boundaryNode) {
+    if (curr.scrollHeight > curr.clientHeight + 10 && curr.clientHeight > 60) {
+      return curr;
+    }
+    curr = curr.parentElement;
+  }
+  return boundaryNode;
+}
+
+// Mock DOM hierarchy:
+// dialog (fixed, 1920x1080)
+//   -> dialogCard (600x600)
+//     -> scrollableList (600x500, scrollHeight 1200)
+//       -> itemRow (600x60)
+//         -> link (inline)
+const mockDialog = { clientHeight: 1080, scrollHeight: 1080 };
+const mockCard = { clientHeight: 600, scrollHeight: 600, parentElement: mockDialog };
+const mockList = { clientHeight: 500, scrollHeight: 1200, parentElement: mockCard };
+const mockRow = { clientHeight: 60, scrollHeight: 60, parentElement: mockList };
+const mockLink = { parentElement: mockRow };
+
+const resolved = resolveScrollContainer(mockLink, mockDialog);
+assert.strictEqual(resolved, mockList, 'Upward container resolution failed to locate true scroll list');
+
+// Threshold-crossing bounce check:
+const pullback = Math.max(0, mockList.scrollHeight - mockList.clientHeight - 250);
+assert.strictEqual(pullback, 450, 'Pullback calculation incorrect');
+assert(pullback < mockList.scrollHeight, 'Pullback must be less than scrollHeight');
+console.log('✓ Test 18: Upward Container Resolution & Threshold-Crossing Scroller verified');
+
+console.log('\n🎉 ALL 18 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
 

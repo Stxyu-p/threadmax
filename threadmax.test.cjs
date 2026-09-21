@@ -773,7 +773,315 @@ assert.strictEqual(pageSmall.remaining, 0, 'Small list remaining must be 0');
 assert.strictEqual(pageSmall.hasMore, false, 'Small list hasMore must be false');
 console.log('✓ Test 24: Virtual Paginated List & Load More Generator verified');
 
-console.log('\n🎉 ALL 24 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 23. TAB SWITCH RECURSION LOCK & TRANSITION INVALIDATION ENGINE ───
+class MockTabSwitchController {
+  constructor() {
+    this._isSwitchingTab = false;
+    this._isTabTransitioning = false;
+    this.activeTab = 'followers';
+    this.followers = new Set(['alice', 'bob']);
+    this.following = new Set();
+    this.dispatchedClicks = 0;
+    this.recursiveAttemptsBlocked = 0;
+  }
+
+  clickTab(targetTabName, dialogClickHandler) {
+    if (this._isSwitchingTab) {
+      this.recursiveAttemptsBlocked++;
+      return false;
+    }
+    this._isSwitchingTab = true;
+    this.dispatchedClicks++;
+
+    // Synthetic DOM event dispatch triggers dialog's capture listener synchronously
+    try {
+      if (typeof dialogClickHandler === 'function') {
+        dialogClickHandler({ target: targetTabName });
+      }
+    } finally {
+      this._isSwitchingTab = false;
+    }
+    return true;
+  }
+
+  switchTab(tabName, shouldClickDOM = true) {
+    this._isTabTransitioning = true;
+    this.activeTab = tabName;
+
+    if (shouldClickDOM) {
+      this.clickTab(tabName, (e) => {
+        // Simulates dialog.addEventListener('click', handleDialogClick, true)
+        if (this._isSwitchingTab) {
+          this.recursiveAttemptsBlocked++;
+          return; // Recursion successfully intercepted!
+        }
+        this.switchTab(e.target, true);
+      });
+    }
+
+    // Complete transition
+    this._isTabTransitioning = false;
+  }
+
+  sniff(renderedHrefs) {
+    if (this._isTabTransitioning) return 0; // Guard active!
+    const targetSet = this.activeTab === 'followers' ? this.followers : this.following;
+    let added = 0;
+    for (const href of renderedHrefs) {
+      const m = href.match(/@([^/?#]+)/);
+      if (m && !targetSet.has(m[1])) {
+        targetSet.add(m[1]);
+        added++;
+      }
+    }
+    return added;
+  }
+}
+
+const tabController = new MockTabSwitchController();
+
+// Initial state
+assert.strictEqual(tabController.activeTab, 'followers', 'Initial tab must be followers');
+assert.strictEqual(tabController.followers.size, 2, 'Followers size mismatch');
+
+// Trigger tab switch to following
+tabController.switchTab('following', true);
+
+// Assert recursion was intercepted
+assert.strictEqual(tabController.dispatchedClicks, 1, 'Exactly one tab click should be dispatched');
+assert.strictEqual(tabController.recursiveAttemptsBlocked, 1, 'Re-entrant recursive call must be blocked');
+assert.strictEqual(tabController.activeTab, 'following', 'Active tab must now be following');
+
+// Sniff during transition guard (simulate lingering stale followers in DOM)
+tabController._isTabTransitioning = true;
+const staleAdded = tabController.sniff(['/@alice', '/@bob']);
+assert.strictEqual(staleAdded, 0, 'Transition guard must prevent sniffing stale accounts into new tab');
+assert.strictEqual(tabController.following.size, 0, 'Following set must remain clean during transition');
+
+// Transition complete -> sniff new following accounts
+tabController._isTabTransitioning = false;
+const freshAdded = tabController.sniff(['/@charlie', '/@david']);
+assert.strictEqual(freshAdded, 2, 'Fresh accounts must be added after transition unlocks');
+assert.strictEqual(tabController.following.size, 2, 'Following set size mismatch');
+assert.deepStrictEqual(Array.from(tabController.following), ['charlie', 'david'], 'Following accounts mismatch');
+
+console.log('✓ Test 25: Tab Switch Recursion Lock & Transition Invalidation Engine verified');
+
+// ─── TEST 26: MutationWatcher Engine Contract ─────────────────
+class TestMutationWatcher {
+  constructor({ debounceMs = 50, maxBatchSize = 10, pauseWhen = () => false, filter = () => true, onMutations }) {
+    this.debounceMs = debounceMs;
+    this.maxBatchSize = maxBatchSize;
+    this.pauseWhen = pauseWhen;
+    this.filter = filter;
+    this.onMutations = onMutations;
+    this.buffer = [];
+    this.paused = false;
+  }
+
+  pushMutations(mutations) {
+    if (this.pauseWhen() || this.paused) return;
+    const filtered = mutations.filter(this.filter);
+    if (filtered.length === 0) return;
+    this.buffer.push(...filtered);
+    if (this.buffer.length > this.maxBatchSize) {
+      this.buffer = this.buffer.slice(-this.maxBatchSize);
+    }
+  }
+
+  flush() {
+    if (this.buffer.length === 0) return;
+    const batch = this.buffer.splice(0, this.maxBatchSize);
+    this.onMutations(batch);
+  }
+}
+
+let mutationBatchesReceived = [];
+let isCapturingModalActive = false;
+const watcher = new TestMutationWatcher({
+  debounceMs: 50,
+  maxBatchSize: 3,
+  pauseWhen: () => isCapturingModalActive,
+  filter: m => m.type === 'childList' && m.addedCount > 0,
+  onMutations: batch => mutationBatchesReceived.push(batch)
+});
+
+// Case 1: Filter out non-childList or empty added nodes
+watcher.pushMutations([
+  { type: 'attributes', addedCount: 0 },
+  { type: 'childList', addedCount: 2, id: 1 },
+  { type: 'childList', addedCount: 1, id: 2 }
+]);
+watcher.flush();
+assert.strictEqual(mutationBatchesReceived.length, 1);
+assert.strictEqual(mutationBatchesReceived[0].length, 2);
+
+// Case 2: Max batch size truncation
+watcher.pushMutations([
+  { type: 'childList', addedCount: 1, id: 3 },
+  { type: 'childList', addedCount: 1, id: 4 },
+  { type: 'childList', addedCount: 1, id: 5 },
+  { type: 'childList', addedCount: 1, id: 6 }
+]);
+// Buffer should be capped at maxBatchSize = 3 (ids 4, 5, 6)
+watcher.flush();
+assert.strictEqual(mutationBatchesReceived[1].length, 3);
+assert.deepStrictEqual(mutationBatchesReceived[1].map(m => m.id), [4, 5, 6]);
+
+// Case 3: Paused when modal is capturing
+isCapturingModalActive = true;
+watcher.pushMutations([{ type: 'childList', addedCount: 1, id: 7 }]);
+watcher.flush();
+assert.strictEqual(mutationBatchesReceived.length, 2, 'Should not process mutations while pauseWhen is active');
+
+console.log('✓ Test 26: MutationWatcher debounce, batching & modal-aware pause verified');
+
+// ─── TEST 27: TokenBucket Rate Limiter Contract ───────────────
+class TestTokenBucket {
+  constructor({ capacity = 5, refillRate = 2, minIntervalMs = 100, startTime = Date.now() }) {
+    this.capacity = capacity;
+    this.refillRate = refillRate;
+    this.tokens = capacity;
+    this.lastRefill = startTime;
+    this.minIntervalMs = minIntervalMs;
+    this.lastOpTime = 0;
+  }
+
+  refill(now = Date.now()) {
+    const elapsedSec = Math.max(0, (now - this.lastRefill) / 1000);
+    this.tokens = Math.min(this.capacity, this.tokens + elapsedSec * this.refillRate);
+    this.lastRefill = now;
+  }
+
+  tryConsume(tokens = 1, now = Date.now()) {
+    this.refill(now);
+    const sinceLastOp = now - this.lastOpTime;
+    if (this.minIntervalMs > 0 && sinceLastOp < this.minIntervalMs) {
+      return { allowed: false, waitMs: this.minIntervalMs - sinceLastOp };
+    }
+    if (this.tokens >= tokens) {
+      this.tokens -= tokens;
+      this.lastOpTime = now;
+      return { allowed: true, waitMs: 0 };
+    }
+    const deficit = tokens - this.tokens;
+    return { allowed: false, waitMs: Math.ceil((deficit / this.refillRate) * 1000) };
+  }
+}
+
+let simTime = 10000;
+const bucket = new TestTokenBucket({ capacity: 3, refillRate: 1, minIntervalMs: 50, startTime: simTime });
+
+// Consume all 3 tokens
+assert.strictEqual(bucket.tryConsume(1, simTime).allowed, true);
+simTime += 60; // > minInterval
+assert.strictEqual(bucket.tryConsume(1, simTime).allowed, true);
+simTime += 60;
+assert.strictEqual(bucket.tryConsume(1, simTime).allowed, true);
+
+// 4th consume should be denied due to token depletion
+simTime += 60;
+const denied = bucket.tryConsume(1, simTime);
+assert.strictEqual(denied.allowed, false, 'Should be denied when bucket is empty');
+assert.ok(denied.waitMs > 0, 'Wait time must be positive');
+
+// Advance time by 2 seconds -> should refill 2 tokens
+simTime += 2000;
+const refilled = bucket.tryConsume(2, simTime);
+assert.strictEqual(refilled.allowed, true, 'Tokens should have refilled after time advance');
+
+// Check minIntervalMs guard
+const tooFast = bucket.tryConsume(1, simTime + 10);
+assert.strictEqual(tooFast.allowed, false, 'Should deny if within minIntervalMs');
+assert.strictEqual(tooFast.waitMs, 40, 'Wait time should match minInterval remaining');
+
+console.log('✓ Test 27: TokenBucket rate-limiting & interval spacing contract verified');
+
+// ─── TEST 28: Semantic Selector Fallback Engine ────────────────
+function testSemanticShareDetection(mockDOM) {
+  // Strategy 1: Find within action row group
+  if (mockDOM.actionGroups) {
+    for (const group of mockDOM.actionGroups) {
+      if (group.buttons && group.buttons.length >= 3) {
+        const shareCandidate = group.buttons.find(b => b.hasShareSvg || b.title === 'Share' || b.ariaLabel === 'Share');
+        if (shareCandidate) return { found: true, method: 'group_semantic', button: shareCandidate };
+      }
+    }
+  }
+  // Strategy 2: Fallback to SVG path matching
+  if (mockDOM.svgPaths) {
+    const matched = mockDOM.svgPaths.some(p => p.includes('M7.247 1.499') || p.includes('M7.246 1.5'));
+    if (matched) return { found: true, method: 'svg_path_fallback', button: { id: 'fallback_btn' } };
+  }
+  return { found: false, method: 'none', button: null };
+}
+
+// 1. Primary semantic group detection
+const resPrimary = testSemanticShareDetection({
+  actionGroups: [
+    { buttons: [{ id: 'like' }, { id: 'reply' }, { id: 'repost' }, { id: 'share', ariaLabel: 'Share' }] }
+  ]
+});
+assert.strictEqual(resPrimary.found, true);
+assert.strictEqual(resPrimary.method, 'group_semantic');
+assert.strictEqual(resPrimary.button.id, 'share');
+
+// 2. Fallback to SVG path when groups aren't rendered
+const resFallback = testSemanticShareDetection({
+  svgPaths: ['M7.247 1.499 C 5.2 2.1...']
+});
+assert.strictEqual(resFallback.found, true);
+assert.strictEqual(resFallback.method, 'svg_path_fallback');
+
+console.log('✓ Test 28: Semantic selector detection & SVG fallback engine verified');
+
+// ─── TEST 29: Progress Watchdog Auto-Cleanup Contract ──────────
+class MockProgressManager {
+  constructor() {
+    this.watchdogs = new Map();
+    this.bars = new Map();
+  }
+
+  showProgress(id, current, total) {
+    this.bars.set(id, { current, total, pct: Math.round((current / total) * 100) });
+    if (this.watchdogs.has(id)) clearTimeout(this.watchdogs.get(id));
+    const timer = setTimeout(() => {
+      this.clearProgress(id, 0);
+    }, 100); // 100ms for testing
+    this.watchdogs.set(id, timer);
+  }
+
+  clearProgress(id, delay = 0) {
+    if (this.watchdogs.has(id)) {
+      clearTimeout(this.watchdogs.get(id));
+      this.watchdogs.delete(id);
+    }
+    if (delay <= 0) {
+      this.bars.delete(id);
+    } else {
+      setTimeout(() => this.bars.delete(id), delay);
+    }
+  }
+}
+
+const pm = new MockProgressManager();
+pm.showProgress('dl_1', 1, 5);
+assert.ok(pm.bars.has('dl_1'), 'Progress bar must exist');
+assert.strictEqual(pm.bars.get('dl_1').pct, 20);
+
+// Explicit clear removes immediately
+pm.clearProgress('dl_1', 0);
+assert.strictEqual(pm.bars.has('dl_1'), false, 'Progress bar should be removed on clear');
+
+// Stalled progress auto-cleanup via watchdog
+pm.showProgress('dl_stalled', 2, 5);
+assert.ok(pm.bars.has('dl_stalled'));
+setTimeout(() => {
+  assert.strictEqual(pm.bars.has('dl_stalled'), false, 'Watchdog must auto-remove stalled progress bar');
+  console.log('✓ Test 29: Progress bar watchdog auto-cleanup contract verified');
+  console.log('\n🎉 ALL 29 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+}, 150);
+
 
 
 

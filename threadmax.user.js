@@ -417,6 +417,56 @@
     return String(text).replace(/[&<>"']/g, m => map[m]);
   }
 
+  /* ─── 4.5 RATE LIMITER (Token Bucket Guard) ────────────────── */
+  class TokenBucket {
+    constructor({ capacity = 10, refillRate = 2, minIntervalMs = 0 }) {
+      this.capacity = capacity;
+      this.refillRate = refillRate;
+      this.tokens = capacity;
+      this.lastRefill = Date.now();
+      this.minIntervalMs = minIntervalMs;
+      this.lastOpTime = 0;
+    }
+
+    refill() {
+      const now = Date.now();
+      const elapsedSec = Math.max(0, (now - this.lastRefill) / 1000);
+      this.tokens = Math.min(this.capacity, this.tokens + elapsedSec * this.refillRate);
+      this.lastRefill = now;
+    }
+
+    tryConsume(tokens = 1) {
+      this.refill();
+      const now = Date.now();
+      const sinceLastOp = now - this.lastOpTime;
+      if (this.minIntervalMs > 0 && sinceLastOp < this.minIntervalMs) {
+        return { allowed: false, waitMs: this.minIntervalMs - sinceLastOp };
+      }
+      if (this.tokens >= tokens) {
+        this.tokens -= tokens;
+        this.lastOpTime = Date.now();
+        return { allowed: true, waitMs: 0 };
+      }
+      const deficit = tokens - this.tokens;
+      return { allowed: false, waitMs: Math.ceil((deficit / this.refillRate) * 1000) };
+    }
+
+    async consume(tokens = 1) {
+      const res = this.tryConsume(tokens);
+      if (res.allowed) return;
+      await new Promise(r => setTimeout(r, res.waitMs));
+      const retry = this.tryConsume(tokens);
+      if (!retry.allowed) {
+        await new Promise(r => setTimeout(r, retry.waitMs));
+      }
+    }
+  }
+
+  const TM_RateLimiters = {
+    graphql: new TokenBucket({ capacity: 10, refillRate: 2, minIntervalMs: 300 }),
+    download: new TokenBucket({ capacity: 5, refillRate: 1, minIntervalMs: 500 })
+  };
+
   /* ─── 5. DOM EXTRACTION (POST, METRICS, ACTIONS) ──────────── */
   const TM_DOM = {
     findShareButtons: () => {
@@ -838,15 +888,32 @@
         bar.innerHTML = '<span class="tm-progress-text"></span><div class="tm-progress-track"><div class="tm-progress-fill"></div></div>';
         anchorBtn.parentElement.appendChild(bar);
       }
+
+      // Auto-cleanup watchdog: ensure stuck progress bars are removed after 30s
+      if (anchorBtn._tmProgressWatchdog) {
+        clearTimeout(anchorBtn._tmProgressWatchdog);
+      }
+      anchorBtn._tmProgressWatchdog = setTimeout(() => {
+        TM_Downloader.clearProgress(anchorBtn, 0);
+      }, 30000);
+
       const pct = Math.round((current / (total || 1)) * 100);
       bar.querySelector('.tm-progress-text').textContent = `${current}/${total} ↓ (${pct}%)`;
       bar.querySelector('.tm-progress-fill').style.width = `${pct}%`;
     },
 
-    clearProgress: (anchorBtn) => {
-      const bar = anchorBtn.parentElement.querySelector('.tm-progress-bar');
+    clearProgress: (anchorBtn, delay = 1200) => {
+      if (anchorBtn._tmProgressWatchdog) {
+        clearTimeout(anchorBtn._tmProgressWatchdog);
+        delete anchorBtn._tmProgressWatchdog;
+      }
+      const bar = anchorBtn.parentElement?.querySelector('.tm-progress-bar');
       if (bar) {
-        setTimeout(() => bar.remove(), 1200);
+        if (delay <= 0) {
+          bar.remove();
+        } else {
+          setTimeout(() => bar.remove(), delay);
+        }
       }
     }
   };
@@ -1594,6 +1661,9 @@
         form.set('variables', JSON.stringify(variables));
         form.set('doc_id', docId);
 
+        // Rate-limit guard: consume token before GraphQL request
+        await TM_RateLimiters.graphql.consume(1);
+
         const res = await fetch(`${baseOrigin}/api/graphql`, {
           method: 'POST',
           headers: {
@@ -1693,36 +1763,44 @@
       return count;
     },
 
+    _isSwitchingTab: false,
+    _isTabTransitioning: false,
+
     findAllScrollContainers: (dialog) => {
       if (!dialog) return [];
       const containers = new Set();
 
-      // Priority 1: Check elements with explicit scrollable overflow-y and scrollable height
-      const all = Array.from(dialog.querySelectorAll('*'));
-      for (const el of all) {
-        if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 60) {
-          try {
-            const style = window.getComputedStyle(el);
-            const oy = style.overflowY;
-            if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
-              containers.add(el);
-            }
-          } catch (_) {}
-        }
-      }
-
-      // Priority 2: Trace upward from user account links (for virtual lists or mock testing)
-      if (containers.size === 0) {
-        const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
-        for (const a of links) {
-          let p = a.parentElement;
+      // Priority 1: Trace upward from user account links (instant O(depth), bypasses scanning 20,000 nodes!)
+      const links = dialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
+      if (links.length > 0) {
+        for (let i = 0; i < Math.min(3, links.length); i++) {
+          let p = links[i].parentElement;
           while (p && p !== dialog && p !== document.body) {
             if (p.scrollHeight > p.clientHeight + 10 && p.clientHeight > 60) {
               containers.add(p);
+              break;
             }
             p = p.parentElement;
           }
           if (containers.size > 0) break;
+        }
+      }
+
+      // Priority 2: If no links yet, check direct children / layout divs instead of full wildcard '*'
+      if (containers.size === 0) {
+        const divs = dialog.querySelectorAll('div, ul, main, section');
+        for (let i = 0; i < divs.length; i++) {
+          const el = divs[i];
+          if (el.scrollHeight > el.clientHeight + 10 && el.clientHeight > 60) {
+            try {
+              const style = window.getComputedStyle(el);
+              const oy = style.overflowY;
+              if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
+                containers.add(el);
+                if (containers.size >= 2) break;
+              }
+            } catch (_) {}
+          }
         }
       }
 
@@ -1735,46 +1813,60 @@
     },
 
     clickTab: (el) => {
-      if (!el) return;
+      if (!el || TM_RelationshipAuditor._isSwitchingTab) return;
+      TM_RelationshipAuditor._isSwitchingTab = true;
       try {
         el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
         el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        if (typeof el.click === 'function') {
+          try { el.click(); } catch (_) {}
+        }
       } catch (_) {}
-      if (typeof el.click === 'function') {
-        try { el.click(); } catch (_) {}
-      }
+      setTimeout(() => {
+        TM_RelationshipAuditor._isSwitchingTab = false;
+      }, 200);
     },
 
     findModalTabs: (dialog) => {
       if (!dialog) return { followersTab: null, followingTab: null };
 
-      const allElements = Array.from(dialog.querySelectorAll('a, div[role="tab"], div[role="button"], button, div, span'));
+      // Look in header / tablist area first (fast path: < 20 nodes)
+      const tabHeader = dialog.querySelector('[role="tablist"], header') || dialog;
+      const candidates = tabHeader.querySelectorAll('[role="tab"], [role="button"], a, button');
       let followersTab = null;
       let followingTab = null;
 
       const followersRegex = /(^ผู้ติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?ผู้ติดตาม$|^followers(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?followers$)/i;
       const followingRegex = /(^กำลังติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?กำลังติดตาม$|^following(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?following$)/i;
 
-      for (const el of allElements) {
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
         const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        if (text.length > 50) continue;
         if (!followersTab && followersRegex.test(text)) {
           followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
         }
         if (!followingTab && followingRegex.test(text)) {
           followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
         }
+        if (followersTab && followingTab) return { followersTab, followingTab };
       }
 
+      // Fallback only if not found in tablist/header (narrow selector, stop early)
       if (!followersTab || !followingTab) {
-        for (const el of allElements) {
+        const fallbackElements = dialog.querySelectorAll('[role="tab"], a, button');
+        for (let i = 0; i < fallbackElements.length; i++) {
+          const el = fallbackElements[i];
           const text = (el.textContent || '').trim();
-          if (!followersTab && text.includes('ผู้ติดตาม') && text.length < 40) {
+          if (text.length > 50) continue;
+          if (!followersTab && (followersRegex.test(text) || text.includes('ผู้ติดตาม') || text.toLowerCase().includes('followers'))) {
             followersTab = el.closest('[role="tab"], [role="button"], a, button') || el;
           }
-          if (!followingTab && text.includes('กำลังติดตาม') && text.length < 40) {
+          if (!followingTab && (followingRegex.test(text) || text.includes('กำลังติดตาม') || text.toLowerCase().includes('following'))) {
             followingTab = el.closest('[role="tab"], [role="button"], a, button') || el;
           }
+          if (followersTab && followingTab) break;
         }
       }
 
@@ -1860,7 +1952,7 @@
             c.scrollTop = maxScroll;
           }
 
-          if (c.scrollTop !== prevTop || c.scrollTop >= maxScroll - 20) {
+          if (c.scrollTop !== prevTop) {
             scrolledAny = true;
           }
 
@@ -1882,6 +1974,7 @@
           } catch (_) {}
         }
 
+        const atBottom = maxScroll <= 0 || c.scrollTop >= maxScroll - 30;
         const rows = currentDialog.querySelectorAll('a[href*="/@"]:not([href*="/post/"])');
         const currentCount = rows.length;
 
@@ -1892,8 +1985,9 @@
           : TM_RelationshipAuditor.liveState.followersTarget;
 
         const isTargetReached = targetNumber > 0 && currentCount >= targetNumber;
+        const isStuckAtBottom = atBottom && (!scrolledAny || currentCount === TM_RelationshipAuditor.autoScrollState.lastCount);
 
-        if (isTargetReached || (currentCount === TM_RelationshipAuditor.autoScrollState.lastCount && !scrolledAny)) {
+        if (isTargetReached || isStuckAtBottom) {
           TM_RelationshipAuditor.autoScrollState.idleTicks++;
           const maxIdle = isTargetReached ? 3 : 6;
           if (TM_RelationshipAuditor.autoScrollState.idleTicks >= maxIdle) {
@@ -2001,7 +2095,7 @@
       let lastFollowingSize = -1;
 
       const sniff = () => {
-        if (!TM_RelationshipAuditor.liveState.isCapturing || isSniffing) return;
+        if (!TM_RelationshipAuditor.liveState.isCapturing || isSniffing || TM_RelationshipAuditor._isTabTransitioning) return;
         const currentDialog = document.querySelector('[role="dialog"]');
         if (!currentDialog) return;
 
@@ -2038,11 +2132,16 @@
 
       // Click delegation on Threads modal tabs
       const handleDialogClick = (e) => {
+        if (TM_RelationshipAuditor._isSwitchingTab) return;
         const { followersTab: fTab, followingTab: gTab } = TM_RelationshipAuditor.findModalTabs(dialog);
         if (gTab && (gTab === e.target || gTab.contains(e.target))) {
-          TM_RelationshipAuditor.switchLiveTab('following');
+          if (TM_RelationshipAuditor.liveState.activeTab !== 'following') {
+            TM_RelationshipAuditor.switchLiveTab('following', false);
+          }
         } else if (fTab && (fTab === e.target || fTab.contains(e.target))) {
-          TM_RelationshipAuditor.switchLiveTab('followers');
+          if (TM_RelationshipAuditor.liveState.activeTab !== 'followers') {
+            TM_RelationshipAuditor.switchLiveTab('followers', false);
+          }
         }
       };
       dialog.addEventListener('click', handleDialogClick, true);
@@ -2073,27 +2172,37 @@
       return true;
     },
 
-    switchLiveTab: (tabName) => {
+    switchLiveTab: (tabName, shouldClickDOM = true) => {
       const dialog = document.querySelector('[role="dialog"]');
       if (!dialog) return;
-      const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
 
+      // 1. Immediately stop any active auto-scroll
+      TM_RelationshipAuditor.stopAutoScroll();
+      if (typeof TM_RelationshipAuditor.onAutoScrollReset === 'function') {
+        TM_RelationshipAuditor.onAutoScrollReset();
+      }
+
+      // 2. Set transition guard so background interval doesn't sniff old tab's accounts
+      TM_RelationshipAuditor._isTabTransitioning = true;
       TM_RelationshipAuditor.liveState.activeTab = tabName;
 
-      // Invalidate tagged anchors so new tab items are recognized
-      dialog.querySelectorAll('a[href*="/@"]').forEach(a => { delete a._tmTagged; });
-
-      if (tabName === 'followers' && followersTab) {
-        TM_RelationshipAuditor.clickTab(followersTab);
-      } else if (tabName === 'following' && followingTab) {
-        TM_RelationshipAuditor.clickTab(followingTab);
+      // 3. Dispatch click to modal tab if requested
+      if (shouldClickDOM) {
+        const { followersTab, followingTab } = TM_RelationshipAuditor.findModalTabs(dialog);
+        const targetEl = tabName === 'followers' ? followersTab : followingTab;
+        if (targetEl) {
+          TM_RelationshipAuditor.clickTab(targetEl);
+        }
       }
 
-      // Clear cached scroll container to ensure auto-scroller re-acquires for new tab
+      // 4. Reset auto-scroll state tracking
       if (TM_RelationshipAuditor.autoScrollState) {
         TM_RelationshipAuditor.autoScrollState.container = null;
+        TM_RelationshipAuditor.autoScrollState.idleTicks = 0;
+        TM_RelationshipAuditor.autoScrollState.lastCount = 0;
       }
 
+      // 5. Fire UI update immediately to show active card/pill state
       if (typeof TM_RelationshipAuditor.liveState.onUpdate === 'function') {
         TM_RelationshipAuditor.liveState.onUpdate({
           followersCount: TM_RelationshipAuditor.liveState.followers.size,
@@ -2103,6 +2212,16 @@
           activeTab: TM_RelationshipAuditor.liveState.activeTab
         });
       }
+
+      // 6. After brief grace period for Threads React DOM to mount new tab's list,
+      // invalidate tagged flags on new nodes and unblock sniffing
+      setTimeout(() => {
+        const curDialog = document.querySelector('[role="dialog"]');
+        if (curDialog) {
+          curDialog.querySelectorAll('a[href*="/@"]').forEach(a => { delete a._tmTagged; });
+        }
+        TM_RelationshipAuditor._isTabTransitioning = false;
+      }, 400);
     },
 
     stopLiveCapture: () => {
@@ -2596,6 +2715,7 @@
           autoScrollBtn.classList.remove('active');
         }
       };
+      TM_RelationshipAuditor.onAutoScrollReset = resetAutoScrollUI;
 
       TM_RelationshipAuditor.onAutoScrollComplete = (count) => {
         resetAutoScrollUI();
@@ -2667,10 +2787,12 @@
       };
 
       switchFollowersBtn.onclick = () => {
+        resetAutoScrollUI();
         TM_RelationshipAuditor.switchLiveTab('followers');
       };
 
       switchFollowingBtn.onclick = () => {
+        resetAutoScrollUI();
         TM_RelationshipAuditor.switchLiveTab('following');
       };
 
@@ -3707,8 +3829,55 @@
     document.head.appendChild(style);
   }
 
+  /* ─── MutationObserver Wrapper (Safe, Debounced, Batched) ───── */
+  class MutationWatcher {
+    constructor({ debounceMs = 250, maxBatchSize = 50, pauseWhen = () => false, filter = () => true, onMutations }) {
+      this.debounceMs = debounceMs;
+      this.maxBatchSize = maxBatchSize;
+      this.pauseWhen = pauseWhen;
+      this.filter = filter;
+      this.onMutations = onMutations;
+      this.observer = null;
+      this.buffer = [];
+      this.timer = null;
+      this.paused = false;
+    }
+
+    observe(target, options) {
+      if (this.observer) this.observer.disconnect();
+      this.observer = new MutationObserver((mutations) => {
+        if (this.pauseWhen()) return;
+        const filtered = mutations.filter(this.filter);
+        if (filtered.length === 0) return;
+        this.buffer.push(...filtered);
+        if (this.buffer.length > this.maxBatchSize) this.buffer = this.buffer.slice(-this.maxBatchSize);
+        if (!this.timer) {
+          this.timer = setTimeout(() => this.flush(), this.debounceMs);
+        }
+      });
+      this.observer.observe(target, options);
+    }
+
+    flush() {
+      this.timer = null;
+      if (this.buffer.length === 0) return;
+      const batch = this.buffer.splice(0, this.maxBatchSize);
+      try {
+        this.onMutations(batch);
+      } catch (e) {
+        console.error('[ThreadMax] MutationWatcher callback error:', e);
+      }
+    }
+
+    pause() { this.paused = true; }
+    resume() { this.paused = false; }
+    disconnect() { if (this.observer) this.observer.disconnect(); if (this.timer) clearTimeout(this.timer); this.buffer = []; }
+  }
+
   /* ─── 17. SCAN & MUTATION OBSERVER ────────────────────────── */
   let scanTimer = null;
+  let mutationWatcher = null;
+
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(() => {
@@ -3729,22 +3898,27 @@
     }, 250);
   }
 
+  function initMutationWatcher() {
+    // Pause when live capture modal is active
+    const pauseWhen = () => typeof TM_RelationshipAuditor !== 'undefined' &&
+      TM_RelationshipAuditor.liveState &&
+      TM_RelationshipAuditor.liveState.isCapturing;
+
+    mutationWatcher = new MutationWatcher({
+      debounceMs: 250,
+      maxBatchSize: 50,
+      pauseWhen,
+      filter: (m) => m.type === 'childList' && m.addedNodes.length > 0,
+      onMutations: () => scheduleScan(),
+    });
+
+    mutationWatcher.observe(document.body, { childList: true, subtree: true });
+  }
+
   function init() {
     injectStyles();
     scheduleScan();
-
-    const observer = new MutationObserver((mutations) => {
-      let shouldScan = false;
-      for (const m of mutations) {
-        if (m.addedNodes.length > 0) {
-          shouldScan = true;
-          break;
-        }
-      }
-      if (shouldScan) scheduleScan();
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
+    initMutationWatcher();
     console.info('[ThreadMax] v1.4.0 initialized successfully');
   }
 

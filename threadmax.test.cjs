@@ -547,6 +547,61 @@ assert.strictEqual(pullback, 450, 'Pullback calculation incorrect');
 assert(pullback < mockList.scrollHeight, 'Pullback must be less than scrollHeight');
 console.log('✓ Test 18: Upward Container Resolution & Threshold-Crossing Scroller verified');
 
-console.log('\n🎉 ALL 18 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── 17. HUMAN-ASSIST LIVE CAPTURE ACCUMULATOR & WORKFLOW ───
+class MockLiveCaptureSession {
+  constructor(targetUsername, followersTarget = 0, followingTarget = 0) {
+    this.targetUsername = targetUsername;
+    this.followersTarget = followersTarget;
+    this.followingTarget = followingTarget;
+    this.activeTab = 'followers';
+    this.followers = new Set();
+    this.following = new Set();
+    this.isCapturing = true;
+  }
+
+  sniff(renderedHrefs) {
+    if (!this.isCapturing) return;
+    const usernames = parseUsernamesFromHrefs(renderedHrefs);
+    const targetSet = this.activeTab === 'followers' ? this.followers : this.following;
+    usernames.forEach(u => targetSet.add(u));
+  }
+
+  switchTab(tab) {
+    this.activeTab = tab;
+  }
+
+  finish(prevSnapshot = null) {
+    this.isCapturing = false;
+    const followers = Array.from(this.followers);
+    const following = Array.from(this.following);
+    const diff = computeRelationshipDiff(followers, following, prevSnapshot);
+    return { followers, following, diff };
+  }
+}
+
+const session = new MockLiveCaptureSession('stxyu.p', 1250, 444);
+
+// Scroll batch 1 on Followers tab
+session.sniff(['/@alice', '/@bob', '/@charlie']);
+assert.strictEqual(session.followers.size, 3, 'Followers batch 1 count mismatch');
+
+// Scroll batch 2 on Followers tab (virtual scroll with overlaps)
+session.sniff(['/@charlie', '/@david', '/@eve']);
+assert.strictEqual(session.followers.size, 5, 'Followers batch 2 deduplication mismatch');
+
+// Switch to Following tab
+session.switchTab('following');
+session.sniff(['/@alice', '/@frank']);
+assert.strictEqual(session.following.size, 2, 'Following batch 1 mismatch');
+
+// Finish and compute diff
+const liveResult = session.finish();
+assert.deepStrictEqual(liveResult.diff.mutual, ['alice'], 'Mutual mismatch in live capture');
+assert.deepStrictEqual(liveResult.diff.fans.sort(), ['bob', 'charlie', 'david', 'eve'].sort(), 'Fans mismatch in live capture');
+assert.deepStrictEqual(liveResult.diff.notFollowingBack, ['frank'], 'NotFollowingBack mismatch in live capture');
+console.log('✓ Test 19: Human-Assist Live Capture Accumulator & Relationship Diff verified');
+
+console.log('\n🎉 ALL 19 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
 
 

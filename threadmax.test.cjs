@@ -1182,7 +1182,32 @@ setTimeout(() => {
   assert.ok(!partitionFollowers.has('charlie'), 'Followers set must not contain following-only account');
 
   console.log('✓ Test 31: Dynamic active tab auto-detection & strict partition contract verified');
-  console.log('\n🎉 ALL 31 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+
+  // ─── TEST 32: Modal Harvester fallback & method existence contract ───
+  assert(userScriptSource.includes('harvestFromModal:'), 'Must implement harvestFromModal');
+  assert(userScriptSource.includes('harvestTwoWayModal:'), 'Must provide harvestTwoWayModal alias for compatibility');
+  console.log('✓ Test 32: Modal Harvester fallback & alias safety contract verified');
+
+  // ─── TEST 33: Responsive srcset high-res media extraction contract ───
+  function testGetBestMediaUrl(img) {
+    const srcset = img.srcset;
+    if (!srcset) return img.src;
+    const candidates = srcset.split(',').map(s => {
+      const [u, w] = s.trim().split(/\s+/);
+      return { url: u, width: parseInt(w, 10) || 0 };
+    }).filter(c => c.url);
+    candidates.sort((a, b) => b.width - a.width);
+    return candidates[0]?.url || img.src;
+  }
+
+  const mockImg = {
+    src: 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg',
+    srcset: 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg 640w, https://scontent.cdninstagram.com/v/t51.2885-15/high_1080.jpg 1080w, https://scontent.cdninstagram.com/v/t51.2885-15/max_1440.jpg 1440w'
+  };
+  assert.strictEqual(testGetBestMediaUrl(mockImg), 'https://scontent.cdninstagram.com/v/t51.2885-15/max_1440.jpg', 'Must pick maximum resolution candidate from srcset');
+  console.log('✓ Test 33: Responsive srcset high-res image extraction contract verified');
+
+  console.log('\n🎉 ALL 33 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 

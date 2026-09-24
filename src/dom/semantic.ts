@@ -4,7 +4,7 @@
  * Upgrade path: structural hooks via data-testid, role, or stable DOM patterns.
  */
 
-import { SELECTORS } from './extract';
+import { SELECTORS } from '../constants';
 
 /** Result of a semantic detection attempt */
 export interface DetectionResult<T> {
@@ -115,7 +115,7 @@ export function findModalTablist(root: Document | Element = document): Detection
 }
 
 /** Find modal tabs */
-export function findModalTabs(root: Document | Element = document): DetectionResult<HTMLCollectionOf<HTMLElement>> {
+export function findModalTabs(root: Document | Element = document): DetectionResult<NodeListOf<HTMLAnchorElement>> {
   const tabs = root.querySelectorAll<HTMLAnchorElement>('[role="tab"]');
   if (tabs.length > 0) return { found: true, element: tabs, method: 'role-tab', confidence: 'high' };
   return { found: false, element: null, method: 'none', confidence: 'low' };
@@ -125,6 +125,19 @@ export function findModalTabs(root: Document | Element = document): DetectionRes
 export function findModalProfileLinks(root: Document | Element = document): HTMLAnchorElement[] {
   const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/@"]'));
   return links.filter(a => !a.href.includes('/post/'));
+}
+
+/** Pick the largest candidate URL from srcset; falls back to src. ponytail: width-descriptor only (no DPR split) — upgrade: density-aware pick. */
+function bestFromSrcset(img: HTMLImageElement): string {
+  const ss = img.getAttribute('srcset');
+  if (!ss) return img.src;
+  let best = '', bestW = 0;
+  for (const part of ss.split(',')) {
+    const bits = part.trim().split(/\s+/);
+    const w = parseInt(bits[1], 10) || 0;
+    if (bits[0] && w >= bestW) { bestW = w; best = bits[0]; }
+  }
+  return best || img.src;
 }
 
 /** Find media elements in a post card */
@@ -210,7 +223,7 @@ export function extractPostMetadata(card: HTMLElement): {
   const { images, videos } = findMediaInCard(card);
   const media = [
     ...videos.map(v => ({ type: 'video' as const, url: v.currentSrc || v.src, element: v })),
-    ...images.map(i => ({ type: 'image' as const, url: i.src, element: i })),
+    ...images.map(i => ({ type: 'image' as const, url: bestFromSrcset(i), element: i })),
   ];
 
   // 3. Text
@@ -226,7 +239,7 @@ export function extractPostMetadata(card: HTMLElement): {
     postDate = new Date(timeResult.element.dateTime);
   }
 
-  card.querySelectorAll('span, div').forEach(el => {
+  card.querySelectorAll<HTMLElement>('span, div').forEach(el => {
     const t = el.innerText?.trim();
     if (/^\d+(\.\d+)?[kKmM]?$/.test(t)) {
       const num = parseMetricNumber(t);
@@ -240,7 +253,7 @@ export function extractPostMetadata(card: HTMLElement): {
   return { author, postId, postUrl, media, text, replies, reposts, likes, postDate };
 }
 
-/** parseMetricNumber re-exported for semantic detection */
+/** Local metric parser (k/m suffixes) */
 function parseMetricNumber(str: string | null | undefined): number {
   if (!str) return 0;
   const s = str.trim().toLowerCase();

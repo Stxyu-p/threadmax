@@ -86,7 +86,7 @@ export function createStoredZip(files: ZipFileEntry[]): Blob {
     cdhView.setUint16(32, 0, true);
     cdhView.setUint16(34, 0, true);
     cdhView.setUint32(36, 0, true);
-    cdhView.setUint32(38, offset, true);
+    cdhView.setUint32(42, offset, true);
     cdh.set(nameBytes, 46);
 
     centralParts.push(cdh);
@@ -108,7 +108,7 @@ export function createStoredZip(files: ZipFileEntry[]): Blob {
   eocdView.setUint32(16, cdOffset, true);
   eocdView.setUint16(20, 0, true);
 
-  return new Blob([...localParts, ...centralParts, eocd], { type: 'application/zip' });
+  return new Blob([...localParts, ...centralParts, eocd] as BlobPart[], { type: 'application/zip' });
 }
 
 // ─── URL Sanitization ────────────────────────────────────────
@@ -214,140 +214,6 @@ export function splitText(text: string, maxLen = 460): string[] {
   return chunks;
 }
 
-// ─── Viral Velocity ──────────────────────────────────────────
-export function calculateVelocity(replies: number, reposts: number, ageMinutes: number): number {
-  const safeAge = Math.max(1, ageMinutes);
-  return (replies * 2 + reposts * 1.5) / safeAge;
-}
-
-export function isRisingPost(
-  replies: number,
-  reposts: number,
-  ageMinutes: number,
-  maxReplies = 50,
-  minVelocity = 0.1,
-  maxAge = 180
-): boolean {
-  if (ageMinutes > maxAge) return false;
-  if (replies >= maxReplies) return false;
-  return calculateVelocity(replies, reposts, ageMinutes) >= minVelocity;
-}
-
-export function shouldDisplayInFeed(isFilterActive: boolean, isRising: boolean): boolean {
-  if (!isFilterActive) return true;
-  return isRising;
-}
-
-// ─── Relationship Diff Engine ────────────────────────────────
-export interface RelationshipDiff {
-  notFollowingBack: string[];
-  fans: string[];
-  mutual: string[];
-  gained: string[];
-  lost: string[];
-  totalFollowers: number;
-  totalFollowing: number;
-}
-
-export interface Snapshot {
-  timestamp: number;
-  followers: string[];
-  following: string[];
-  diff?: RelationshipDiff;
-}
-
-export function computeRelationshipDiff(
-  currentFollowers: string[],
-  currentFollowing: string[],
-  prevSnapshot: Snapshot | null = null
-): RelationshipDiff {
-  const followerSet = new Set(currentFollowers.map(u => String(u).toLowerCase()));
-  const followingSet = new Set(currentFollowing.map(u => String(u).toLowerCase()));
-
-  const notFollowingBack = currentFollowing.filter(u => !followerSet.has(String(u).toLowerCase()));
-  const fans = currentFollowers.filter(u => !followingSet.has(String(u).toLowerCase()));
-  const mutual = currentFollowing.filter(u => followerSet.has(String(u).toLowerCase()));
-
-  let gained: string[] = [];
-  let lost: string[] = [];
-  if (prevSnapshot && Array.isArray(prevSnapshot.followers)) {
-    const prevFollowerSet = new Set(prevSnapshot.followers.map(u => String(u).toLowerCase()));
-    gained = currentFollowers.filter(u => !prevFollowerSet.has(String(u).toLowerCase()));
-    lost = prevSnapshot.followers.filter(u => !followerSet.has(String(u).toLowerCase()));
-  }
-
-  return {
-    notFollowingBack,
-    fans,
-    mutual,
-    gained,
-    lost,
-    totalFollowers: currentFollowers.length,
-    totalFollowing: currentFollowing.length,
-  };
-}
-
-// ─── Snapshot Contract Validation ────────────────────────────
-export function validateSnapshotContract(snapshot: unknown): snapshot is Snapshot {
-  if (!snapshot || typeof snapshot !== 'object') return false;
-  const s = snapshot as Record<string, unknown>;
-  if (typeof s.timestamp !== 'number') return false;
-  if (!Array.isArray(s.followers)) return false;
-  if (!Array.isArray(s.following)) return false;
-  if (!s.diff || typeof s.diff !== 'object') return false;
-  return true;
-}
-
-// ─── Username Extraction from HREFs ──────────────────────────
-const EXCLUDED_PATHS = new Set(['post', 'explore', 'search', 'activity', 'messages', 'settings']);
-
-export function parseUsernamesFromHrefs(hrefs: string[]): string[] {
-  const found = new Set<string>();
-  for (const href of hrefs) {
-    if (href.includes('/post/')) continue;
-    const m = href.match(/@([^/?#]+)/);
-    if (m) {
-      const u = m[1].toLowerCase();
-      if (!EXCLUDED_PATHS.has(u)) found.add(u);
-    }
-  }
-  return Array.from(found);
-}
-
-// ─── GraphQL Payload Builder ─────────────────────────────────
-export function buildGraphQLPayload(docId: string, lsd: string, userId: string, cursor: string | null = null): string {
-  const form = new URLSearchParams();
-  if (lsd) form.set('lsd', lsd);
-  form.set('variables', JSON.stringify({ userID: userId, first: 50, after: cursor }));
-  form.set('doc_id', docId);
-  return form.toString();
-}
-
-// ─── Number Extraction from Text ─────────────────────────────
-export function extractNumberFromText(str: string | null | undefined): number {
-  if (!str) return 0;
-  const s = String(str).trim();
-  const m = s.replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([kmb])?/i);
-  if (!m) return 0;
-  let num = parseFloat(m[1]);
-  const suffix = (m[2] || '').toLowerCase();
-  if (suffix === 'k') num *= 1000;
-  else if (suffix === 'm') num *= 1000000;
-  else if (suffix === 'b') num *= 1000000000;
-  return Math.round(num);
-}
-
-// ─── Tab Detection Regex ─────────────────────────────────────
-export const followersRegex = /(^ผู้ติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?ผู้ติดตาม$|^followers(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?followers$)/i;
-export const followingRegex = /(^กำลังติดตาม(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?กำลังติดตาม$|^following(\s+[\d,kmb\.]+)?$|^([\d,kmb\.]+\s+)?following$)/i;
-
-// ─── Tab Weight Detection ────────────────────────────────────
-export function detectTabFromWeights(f1Weight: number, f2Weight: number): 'followers' | 'following' | null {
-  if (f2Weight > f1Weight + 15) return 'following';
-  if (f1Weight > f2Weight + 15) return 'followers';
-  return null;
-}
-
 // ─── Portal Positioning ──────────────────────────────────────
 export interface PortalCoords {
   top: number;
@@ -369,75 +235,15 @@ export function computePortalCoordinates(
   return { top, left, zIndex: 2147483647 };
 }
 
-// ─── Scroll Container Resolution ─────────────────────────────
-export interface ScrollableElement {
-  clientHeight: number;
-  scrollHeight: number;
-  parentElement: ScrollableElement | null;
-}
-
-export function resolveScrollContainer(
-  startNode: ScrollableElement | null,
-  boundaryNode: ScrollableElement
-): ScrollableElement {
-  let curr = startNode?.parentElement ?? null;
-  while (curr && curr !== boundaryNode) {
-    if (curr.scrollHeight > curr.clientHeight + 10 && curr.clientHeight > 60) {
-      return curr;
-    }
-    curr = curr.parentElement;
-  }
-  return boundaryNode;
-}
-
-// ─── Pagination Helper ───────────────────────────────────────
-export interface PageResult<T> {
-  display: T[];
-  remaining: number;
-  hasMore: boolean;
-}
-
-export function paginateAccounts<T>(accounts: T[], limit = 50): PageResult<T> {
-  const display = accounts.slice(0, limit);
-  const remaining = Math.max(0, accounts.length - limit);
-  return { display, remaining, hasMore: remaining > 0 };
-}
-
 // ─── HTML Escape ─────────────────────────────────────────────
 export function escapeHtml(text: string): string {
   const map: Record<string, string> = {
-    '&': '&',
-    '<': '<',
-    '>': '>',
-    '"': '"',
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
     "'": '&#039;',
   };
   return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
-// ─── User ID Validation ──────────────────────────────────────
-export function validateUserId(id: string | null | undefined): boolean {
-  if (!id) return false;
-  const s = String(id).trim();
-  return /^\d{4,25}$/.test(s) && s !== '0';
-}
-
-export function extractIdFromCookie(cookieStr: string): string | null {
-  const m = (cookieStr || '').match(/(?:^|;\s*)ds_user_id=(\d+)/);
-  return m ? m[1] : null;
-}
-
-export function extractIdFromDeepLink(tagContent: string): string | null {
-  const m = (tagContent || '').match(/(?:barcelona|instagram):\/\/user\?id=(\d+)/i);
-  return m ? m[1] : null;
-}
-
-export function extractIdFromScriptSlice(scriptText: string, username: string): string | null {
-  if (!scriptText || !username) return null;
-  const clean = username.replace(/^@/, '').toLowerCase();
-  const idx = scriptText.toLowerCase().indexOf(clean);
-  if (idx === -1) return null;
-  const slice = scriptText.substring(Math.max(0, idx - 600), Math.min(scriptText.length, idx + 600));
-  const m = slice.match(/"(?:pk|user_id|target_user_id|profile_id)":"?(\d{4,25})"?/);
-  return (m && m[1] !== '0') ? m[1] : null;
-}

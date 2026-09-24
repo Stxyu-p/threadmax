@@ -3,9 +3,9 @@
  * Visual indicator for 180-char mobile cutoff + thread splitting.
  */
 
-import { evaluateComposerHook, HookStatus, splitText, escapeHtml, CSS_PREFIX, Z_INDEX } from '../utils';
-import { THRESHOLDS, TIMING } from '../constants';
-import { SELECTORS } from '../dom/extract';
+import { evaluateComposerHook, HookStatus, splitText, escapeHtml } from '../utils';
+import { THRESHOLDS, TIMING, CSS_PREFIX } from '../constants';
+import { SELECTORS } from '../constants';
 
 interface ComposerBar {
   element: HTMLElement;
@@ -80,6 +80,20 @@ export function initAllComposers(): void {
 
 // ─── Splitter Modal ───────────────────────────────────────────
 let splitterModal: HTMLElement | null = null;
+let splitterOpener: HTMLElement | null = null;
+
+const onSplitterKeydown = (e: KeyboardEvent): void => {
+  if (!splitterModal) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeSplitter(); return; }
+  if (e.key !== 'Tab') return;
+  const f = splitterModal.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  const active = document.activeElement as HTMLElement | null;
+  const inside = active && splitterModal.contains(active);
+  if (e.shiftKey && (!inside || active === first)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (!inside || active === last)) { e.preventDefault(); first.focus(); }
+};
 
 export function openSplitter(rawText: string): void {
   const chunks = splitText(rawText);
@@ -116,9 +130,15 @@ export function openSplitter(rawText: string): void {
     </div>
   `;
 
+  splitterModal.setAttribute('role', 'dialog');
+  splitterModal.setAttribute('aria-modal', 'true');
+  splitterModal.setAttribute('aria-label', 'Thread Splitter');
+  splitterOpener = document.activeElement as HTMLElement | null;
   document.body.appendChild(splitterModal);
+  document.addEventListener('keydown', onSplitterKeydown);
+  (splitterModal.querySelector(`#${CSS_PREFIX}close-split`) as HTMLButtonElement | null)?.focus();
 
-  splitterModal.querySelectorAll(`.${CSS_PREFIX}copy-chunk`).forEach(btn => {
+  splitterModal.querySelectorAll<HTMLButtonElement>(`.${CSS_PREFIX}copy-chunk`).forEach(btn => {
     btn.onclick = () => {
       const idx = parseInt((btn as HTMLElement).dataset.index || '0', 10);
       const formatted = `${idx + 1}/${total}\n\n${chunks[idx]}`;
@@ -128,20 +148,23 @@ export function openSplitter(rawText: string): void {
     };
   });
 
-  splitterModal.querySelector(`#${CSS_PREFIX}copy-all-split`)!.onclick = () => {
+  splitterModal.querySelector<HTMLElement>(`#${CSS_PREFIX}copy-all-split`)!.onclick = () => {
     const full = chunks.map((c, i) => `[${i + 1}/${total}]\n${c}`).join('\n\n---\n\n');
     navigator.clipboard.writeText(full).then(() => {
       showToast('✓ คัดลอกเธรดที่แบ่งแล้วทั้งหมด');
     });
   };
 
-  splitterModal.querySelector(`#${CSS_PREFIX}close-split`)!.onclick = closeSplitter;
-  splitterModal.querySelector(`.${CSS_PREFIX}reader-overlay`)!.onclick = closeSplitter;
+  splitterModal.querySelector<HTMLElement>(`#${CSS_PREFIX}close-split`)!.onclick = closeSplitter;
+  splitterModal.querySelector<HTMLElement>(`.${CSS_PREFIX}reader-overlay`)!.onclick = closeSplitter;
 }
 
 export function closeSplitter(): void {
+  document.removeEventListener('keydown', onSplitterKeydown);
   splitterModal?.remove();
   splitterModal = null;
+  splitterOpener?.focus();
+  splitterOpener = null;
 }
 
 // ─── Toast helper ─────────────────────────────────────────────
@@ -150,6 +173,8 @@ function showToast(msg: string, duration = TIMING.TOAST_DURATION_MS): void {
   if (!toast) {
     toast = document.createElement('div');
     toast.id = `${CSS_PREFIX}toast`;
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
     document.body.appendChild(toast);
   }
   toast.textContent = msg;

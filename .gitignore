@@ -1,2 +1,3 @@
 # Ignore temporary screenshots
 *.png
+node_modules/

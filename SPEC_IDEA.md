@@ -11,10 +11,9 @@
 
 ## 1. Executive Summary & Core Philosophy
 
-**ThreadMax** คือ Tampermonkey Userscript ประสิทธิภาพสูงสำหรับ Threads Web (`threads.com` และ `threads.net`) พัฒนาขึ้นเพื่อแก้ปัญหาและปิดจุดบกพร่องของหน้าเว็บ Threads โดยเฉพาะ ด้วยการรวม 3 เสาหลัก:
+**ThreadMax** คือ Tampermonkey Userscript ประสิทธิภาพสูงสำหรับ Threads Web (`threads.com` และ `threads.net`) พัฒนาขึ้นเพื่อแก้ปัญหาและปิดจุดบกพร่องของหน้าเว็บ Threads โดยเฉพาะ ด้วยการรวม 2 เสาหลัก:
 1. **Precision Media & Playback Engine:** ดาวน์โหลดมีเดียคมชัดสูงทั้ง Carousel/Mixed Media และระบบควบคุมวิดีโอระดับ Native
 2. **Reading & Composer Leverage:** ประสบการณ์การอ่านเธรดยาวอย่างลื่นไหล และเครื่องมือช่วยจัดโครงสร้างเนื้อหาเพื่อเพิ่มการเข้าถึง
-3. **Growth & Relationship Intelligence:** เรดาร์วิเคราะห์โพสต์ไวรัลและตรวจจับสถานะความสัมพันธ์ของบัญชีอย่างปลอดภัย
 
 ### หลักการวิศวกรรม 5 ประการ (Engineering Invariants)
 - 🛡️ **100% Client-Side & Zero-Telemetry:** ไม่ส่งข้อมูลออกนอกเครื่อง ไม่ใช้เซิร์ฟเวอร์ภายนอก ทำงานบนเบราว์เซอร์ของผู้ใช้ทั้งหมด
@@ -29,10 +28,10 @@
 ## 2. Roadmap & Feature Specification
 
 ```
-[Phase 1: Core Media & Playback] ───► [Phase 2: Reading & Composer] ───► [Phase 3: Growth Intelligence]
- • Carousel Bulk Download (ZIP/Ind)    • Thread Unroller (1/N Reader)     • Viral Velocity Radar
- • Video Player Booster (Speed/PiP)    • Composer Hook Visual Guide       • Relationship Radar (Diff)
- • Clean Link Copy                     • One-Click Thread Splitter        • ThreadMax Studio Drawer
+[Phase 1: Core Media & Playback] ───► [Phase 2: Reading & Composer]
+ • Carousel Bulk Download (ZIP/Ind)    • Thread Unroller (1/N Reader)
+ • Video Player Booster (Speed/PiP)    • Composer Hook Visual Guide
+ • Clean Link Copy                     • One-Click Thread Splitter
  • Smart Configurable Timestamp
 ```
 
@@ -105,31 +104,15 @@
 
 ---
 
-### Phase 3: Growth & Relationship Intelligence (MaxPland & Telefilter Patterns)
+### Phase 3 — DESCOPED (2026-09-24)
 
-#### 3.1 Viral Velocity Radar (เรดาร์ตรวจจับโพสต์กำลังโต)
-- **กลไกการวิเคราะห์:**
-  $$\text{Velocity Score} = \frac{\text{Replies} \times 2 + \text{Reposts} \times 1.5}{\text{Post Age (minutes)}}$$
-- **พฤติกรรม:**
-  - ตรวจจับโพสต์ในฟีดที่มีอัตราเร่งสูง แต่ **ยอดรวมคอมเมนต์ยังไม่หนาแน่น (< 30-50 คอมเมนต์)**
-  - ติดป้าย Minimal Badge เล็กๆ: `⚡ Rising (15 replies/hr)`
-  - เพิ่มปุ่มสวิตช์ Filter เร็วแบบ Telefilter บนแท็บบนสุด: `[All] [🔥 Rising Radar]`
-- **ประโยชน์ต่อการเติบโต:** ช่วยให้ผู้ใช้เข้าไปแลกเปลี่ยนความเห็นคุณภาพ (Early High-Value Reply) ได้ทันเวลา ทำให้อัลกอริทึมดันความเห็นของเราไปอยู่ด้านบน ดึงดูดผู้ติดตามใหม่เข้าโปรไฟล์ต่อเนื่อง
+แผน Phase 3 (ชุดฟีเจอร์เติบโต/ความสัมพันธ์ รวมถึง launcher หลักของ UI เดิม) ถูก **ตัดออกจาก scope แล้ว** ตามคำสั่งของเจ้าของโปรเจกต์
 
-#### 3.2 Relationship Radar & Mutual Auditor (ถอดแบบระบบอัจฉริยะจาก IG MaxPland)
-- **กลไกความปลอดภัย (Anti-Detection & Safe Pacing):**
-  - ดึงข้อมูล Followers / Following ผ่าน Session แท้ของเบราว์เซอร์
-  - ทำงานแบบ Bounded Batch Scan พร้อมสุ่มดีเลย์ (Jitter 3,000–5,000ms) ไม่กระหน่ำยิง Request ป้องกันการติด Checkpoint
-- **Snapshot Diff Engine (IndexedDB Vault):**
-  - บันทึกสถานะผู้ติดตามลงใน IndexedDB ประจำเครื่อง
-  - เปรียบเทียบความเปลี่ยนแปลงอัตโนมัติ:
-    1. **Not Following Back:** บัญชีที่เราติดตาม แต่เขาไม่ได้ติดตามเรากลับ
-    2. **Fans / Admirers:** บัญชีที่ติดตามเรา แต่เรายังไม่ได้ติดตามกลับ
-    3. **Mutual Friends:** บัญชีที่ติดตามซึ่งกันและกัน
-    4. **Lost / Gained Followers:** ติดตามว่ามีใครเพิ่งเลิกติดตามหรือกดติดตามใหม่หลังจากโพสต์ล่าสุด
-- **ThreadMax Studio UI:**
-  - Launcher ปุ่มไอคอนคมชัดที่มุมล่างซ้าย เปิดหน้าต่าง Studio Drawer สไตล์ Solid Neutral (`#161616`, Hairline `#282828`)
-  - มีแถบความคืบหน้าแสดงสถิติจริง: `กำลังสแกน... 150/420 บัญชี (18s)`
+- เหตุผล: ความเสี่ยงต่อความปลอดภัยของบัญชี, ภาระบำรุงรักษาสูงกว่าคุณค่าที่ได้, และต้องการโฟกัส core ให้แน่น
+- สิ่งที่ถูกนำออกทั้งหมด: ดูรายละเอียดเดิมได้จาก git history ก่อน commit ที่แก้เอกสารนี้
+- ไม่มีแผนนำกลับมาในระยะนี้
+
+---
 
 ---
 
@@ -149,7 +132,6 @@
 | Store | Mechanism | Key / Store Name | Data Content |
 | :--- | :--- | :--- | :--- |
 | Settings | `GM_setValue` | `tm_config` | `{ downloadMode: 'zip'\|'individual', timestampMode: 'hybrid'\|'absolute'\|'native', videoVolume: 0.8 }` |
-| Relationship Snapshots | IndexedDB | `ThreadMaxDB` (`snapshots` store) | `{ timestamp: number, followers: string[], following: string[], diff: {...} }` |
 
 ### 3.3 DOM Strategy & Selectors
 
@@ -182,6 +164,3 @@
 2. **Phase 2 Verification:**
    - ทดสอบ Unroll โพสต์ที่มีการตอบตัวเอง 5+ โพสต์ต่อเนื่อง แสดงผลเป็นหน้าเดียวได้สมบูรณ์ และ Export เป็น Markdown ได้ถูกต้อง
    - เส้น Hook Indicator แสดงตำแหน่งตัดข้อความตรงกับมุมมองมือถือจริง
-3. **Phase 3 Verification:**
-   - เรดาร์คำนวณ Velocity โพสต์ถูกต้องตามเวลาและยอดเอนเกจเมนต์ ไม่ทำให้ฟีดกระตุก
-   - ระบบสแกนความสัมพันธ์ใน IndexedDB ทำงานแบบ Paced Batch ไม่เกิด Rate-limit หรือ Account Warning

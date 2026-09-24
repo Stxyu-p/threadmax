@@ -1,27 +1,20 @@
 /**
  * ThreadMax — Entry Point
- * Orchestrates Phase 1, Phase 2, and Phase 3 features.
+ * Orchestrates Phase 1 and Phase 2 features.
  * Pure Vanilla TypeScript, Zero External Dependencies.
  */
 
-import { installGraphQLSniffer } from './features/auditor/graphql';
 import { updateAllTimestamps } from './features/timestamp';
 import { enhanceVideo } from './features/video';
 import { enhanceComposer } from './features/composer';
-import { scanViralRadar, injectFilterBar } from './features/viral';
-import { findShareButtons, findPostCard } from './dom/extract';
 import { MutationWatcher } from './dom/observer';
 import { CSS_PREFIX, TIMING } from './constants';
 
 /**
- * Scan feed and inject Phase 1, 2, and 3 triggers
+ * Scan feed and inject Phase 1 and 2 triggers
  */
 export function scheduleScan(): void {
-  // 1. Phase 1: In-feed download & clean link triggers
-  const shareItems = findShareButtons();
-  shareItems.forEach(shareInfo => {
-    // Injected by buttons module / DOM handler
-  });
+  // 1. Phase 1: in-feed buttons are injected by the bundle's buttons module (src parity pending)
 
   // 2. Phase 1: Video Player Booster
   document.querySelectorAll<HTMLVideoElement>('video').forEach(video => {
@@ -36,18 +29,12 @@ export function scheduleScan(): void {
     enhanceComposer(box);
   });
 
-  // 5. Phase 3: Viral Velocity Radar
-  injectFilterBar();
-  scanViralRadar();
 }
 
 /**
  * Initialize ThreadMax
  */
 export function init(): void {
-  // Phase 3 Sniffer: captures doc_id from live requests
-  installGraphQLSniffer();
-
   // Phase 1 / Mutation Observer: debounced, batched, safe
   let scanTimer: any = null;
   const debouncedScan = () => {

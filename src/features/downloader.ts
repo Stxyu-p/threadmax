@@ -8,6 +8,11 @@ import { cleanPostUrl, createStoredZip, makeFilename } from '../utils';
 import { TM_Config } from '../config';
 import { TIMING, UI_DIMENSIONS, Z_INDEX, CSS_PREFIX } from '../constants';
 
+declare function GM_download(options: {
+  url: string; name: string; saveAs?: boolean;
+  onload?: () => void; onerror?: () => void; ontimeout?: () => void;
+}): void;
+
 // ─── Progress Bar DOM ─────────────────────────────────────────
 const progressTimeouts = new WeakMap<HTMLElement, any>();
 
@@ -22,6 +27,12 @@ export function showProgress(anchorBtn: HTMLElement, current: number, total: num
     `;
     anchorBtn.parentElement?.appendChild(bar);
   }
+
+  bar.setAttribute('role', 'progressbar');
+  bar.setAttribute('aria-label', 'ThreadMax download progress');
+  bar.setAttribute('aria-valuemin', '0');
+  bar.setAttribute('aria-valuemax', String(total));
+  bar.setAttribute('aria-valuenow', String(current));
 
   // Clear existing watchdog timer
   if (progressTimeouts.has(anchorBtn)) {
@@ -38,7 +49,7 @@ export function showProgress(anchorBtn: HTMLElement, current: number, total: num
   (bar.querySelector(`.${CSS_PREFIX}progress-fill`) as HTMLElement).style.width = `${pct}%`;
 }
 
-export function clearProgress(anchorBtn: HTMLElement, delay = TIMING.PROGRESS_BAR_CLEAR_DELAY_MS): void {
+export function clearProgress(anchorBtn: HTMLElement, delay: number = TIMING.PROGRESS_BAR_CLEAR_DELAY_MS): void {
   if (progressTimeouts.has(anchorBtn)) {
     clearTimeout(progressTimeouts.get(anchorBtn));
     progressTimeouts.delete(anchorBtn);
@@ -67,31 +78,41 @@ export function downloadBlob(blob: Blob, filename: string): void {
   }, 1500);
 }
 
-export function downloadDirect(url: string, filename: string): void {
+// onDone(ok): true = saved & verified, false = unverified/failed (honest per-file counting).
+export function downloadDirect(url: string, filename: string, onDone?: (ok: boolean) => void): void {
   if (typeof GM_download === 'function') {
     GM_download({
       url,
       name: filename,
       saveAs: false,
-      onerror: () => fallbackDownload(url, filename),
+      onload: () => onDone?.(true),
+      onerror: () => fallbackDownload(url, filename, onDone),
+      ontimeout: () => fallbackDownload(url, filename, onDone),
     });
   } else {
-    fallbackDownload(url, filename);
+    fallbackDownload(url, filename, onDone);
   }
 }
 
-function fallbackDownload(url: string, filename: string): void {
+function fallbackDownload(url: string, filename: string, onDone?: (ok: boolean) => void): void {
   fetch(url)
-    .then(res => res.blob())
-    .then(blob => downloadBlob(blob, filename))
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.blob();
+    })
+    .then(blob => { downloadBlob(blob, filename); onDone?.(true); })
+    // ponytail: raw <a download> fallback cannot report result → false (unverified). Upgrade: fetch-only path.
     .catch(() => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch {}
+      onDone?.(false);
     });
 }
 
@@ -105,7 +126,10 @@ export function downloadSingle(mediaItem: MediaItem, author: string, postId: str
     setTimeout(() => clearProgress(anchorBtn), TIMING.PROGRESS_BAR_CLEAR_DELAY_MS);
   } else {
     fetch(mediaItem.url)
-      .then(r => r.blob())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.blob();
+      })
       .then(blob => {
         downloadBlob(blob, filename);
         clearProgress(anchorBtn);
@@ -139,9 +163,14 @@ export async function downloadBatch(opts: DownloadBatchOptions): Promise<void> {
     for (let i = 0; i < mediaList.length; i++) {
       const item = mediaList[i];
       const filename = makeFilename(author, postId, i + 1, item.type);
-      downloadDirect(item.url, filename);
-      completed++;
-      showProgress(anchorBtn, completed, total);
+      // completion counted only after GM_download reports onload (or the fetch fallback lands)
+      await new Promise<void>(resolve => {
+        downloadDirect(item.url, filename, (ok) => {
+          if (ok) completed++; else failed++;
+          showProgress(anchorBtn, i + 1, total);
+          resolve();
+        });
+      });
       await new Promise(r => setTimeout(r, TIMING.DOWNLOAD_INDIVIDUAL_DELAY_MS));
     }
     setTimeout(() => clearProgress(anchorBtn), 1500);
@@ -157,6 +186,7 @@ export async function downloadBatch(opts: DownloadBatchOptions): Promise<void> {
 
     try {
       const resp = await fetch(item.url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const buf = await resp.arrayBuffer();
       zipFiles.push({ name: entryName, data: new Uint8Array(buf) });
       completed++;

@@ -4,7 +4,7 @@
  */
 
 import { TM_Config } from '../config';
-import { formatAbsolute, formatHybrid, CSS_PREFIX } from '../utils';
+import { formatAbsolute } from '../utils';
 import { THRESHOLDS } from '../constants';
 
 let currentTimestampMode: string | null = null;

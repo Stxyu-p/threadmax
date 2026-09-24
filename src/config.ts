@@ -3,19 +3,21 @@
  * GM_* API with localStorage fallback, typed accessors.
  */
 
-import { STORAGE_KEYS, DEFAULT_CONFIG, DOWNLOAD_MODES, TIMESTAMP_MODES, VIDEO_SPEEDS } from '../constants';
+import { STORAGE_KEYS, DEFAULT_CONFIG, DOWNLOAD_MODES, TIMESTAMP_MODES, VIDEO_SPEEDS } from './constants';
 
 export type DownloadMode = typeof DOWNLOAD_MODES[number];
 export type TimestampMode = typeof TIMESTAMP_MODES[number];
 export type VideoSpeed = typeof VIDEO_SPEEDS[number];
+
+declare function GM_getValue(key: string, fallback?: unknown): unknown;
+declare function GM_setValue(key: string, value: unknown): void;
+declare function GM_registerMenuCommand(label: string, fn: () => void): void;
 
 export interface TMConfig {
   downloadMode: DownloadMode;
   timestampMode: TimestampMode;
   videoVolume: number;
   videoSpeed: VideoSpeed;
-  viralRadarEnabled: boolean;
-  filterRising: boolean;
 }
 
 const isGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
@@ -52,22 +54,6 @@ export const TM_Config = {
 
   getVideoSpeed: (): VideoSpeed => gmGet(STORAGE_KEYS.VIDEO_SPEED, DEFAULT_CONFIG.videoSpeed),
   setVideoSpeed: (v: VideoSpeed) => gmSet(STORAGE_KEYS.VIDEO_SPEED, v),
-
-  getViralRadarEnabled: (): boolean => gmGet(STORAGE_KEYS.VIRAL_RADAR, DEFAULT_CONFIG.viralRadarEnabled),
-  setViralRadarEnabled: (v: boolean) => gmSet(STORAGE_KEYS.VIRAL_RADAR, v),
-
-  getFilterRising: (): boolean => gmGet(STORAGE_KEYS.FILTER_RISING, DEFAULT_CONFIG.filterRising),
-  setFilterRising: (v: boolean) => gmSet(STORAGE_KEYS.FILTER_RISING, v),
-
-  // Doc IDs for GraphQL
-  getDocIdFollowers: (): string | null => gmGet(STORAGE_KEYS.DOC_ID_FOLLOWERS, null),
-  setDocIdFollowers: (v: string) => gmSet(STORAGE_KEYS.DOC_ID_FOLLOWERS, v),
-  getDocIdFollowing: (): string | null => gmGet(STORAGE_KEYS.DOC_ID_FOLLOWING, null),
-  setDocIdFollowing: (v: string) => gmSet(STORAGE_KEYS.DOC_ID_FOLLOWING, v),
-
-  // User ID cache
-  getUserId: (username: string): string | null => gmGet(`${STORAGE_KEYS.USER_ID_PREFIX}${username.toLowerCase()}`, null),
-  setUserId: (username: string, id: string) => gmSet(`${STORAGE_KEYS.USER_ID_PREFIX}${username.toLowerCase()}`, id),
 
   // Generic
   get: <T>(key: string, fallback: T): T => gmGet(key, fallback),

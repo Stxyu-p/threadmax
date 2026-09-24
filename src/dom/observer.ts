@@ -29,13 +29,8 @@ export class MutationWatcher {
   private isDestroyed = false;
 
   constructor(config: ObserverConfig) {
-    this.config = {
-      debounceMs: 250,
-      maxBatchSize: 100,
-      filter: () => true,
-      pauseWhen: () => false,
-      ...config,
-    };
+    const { debounceMs = 250, maxBatchSize = 100, filter = () => true, pauseWhen = () => false, onMutations } = config;
+    this.config = { debounceMs, maxBatchSize, filter, pauseWhen, onMutations };
   }
 
   /** Start observing the target node */
@@ -78,7 +73,7 @@ export class MutationWatcher {
 
   /** Check if currently paused */
   get paused(): boolean {
-    return this.isPaused || this.config.pauseWhen?.() ?? false;
+    return this.isPaused || (this.config.pauseWhen?.() ?? false);
   }
 
   /** Update config at runtime */
@@ -132,7 +127,7 @@ export class MutationWatcher {
       // Exponential backoff on error
       setTimeout(() => {
         if (!this.isDestroyed && !this.config.pauseWhen?.()) {
-          this.config.onMutations(mutations).catch(() => {});
+          this.config.onMutations(mutations);
         }
       }, 1000);
     }

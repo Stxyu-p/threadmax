@@ -6,12 +6,11 @@
 
 import {
   findShareButton,
-  findPostCard,
+  findPostCard as detectPostCard,
   findMediaInCard,
   findTimestamp,
   findTextContainer,
   extractPostMetadata,
-  parseMetricNumber,
 } from './semantic';
 import { cleanPostUrl, makeFilename } from '../utils';
 
@@ -85,7 +84,7 @@ export function findShareButtons(): ShareButtonInfo[] {
 export function findPostCard(startNode: HTMLElement | null): HTMLElement {
   if (!startNode) return document.body;
 
-  const result = findPostCard(startNode);
+  const result = detectPostCard(startNode);
   if (result.found && result.element) {
     return result.element;
   }

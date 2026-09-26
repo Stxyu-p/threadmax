@@ -187,11 +187,20 @@
   };
 
   // Resolves true = file saved & verified, false = unverified/failed (P1: honest per-file counting).
+  // GM_download only calls ontimeout when a timeout option is passed, and the option
+  // was missing: a stalled download left the promise pending forever, the progress
+  // bar wedged at 0/n, and the "individual files" loop never advanced past that file.
+  const GM_DOWNLOAD_TIMEOUT_MS = 30000;
   const downloadDirect = (url, filename) => new Promise((resolve) => {
-    if (typeof GM_download === 'function') {
-      GM_download({ url, name: filename, saveAs: false, onload: () => resolve(true),
-        onerror: () => fetchAsBlob(url, filename, resolve), ontimeout: () => fetchAsBlob(url, filename, resolve) });
-    } else fetchAsBlob(url, filename, resolve);
+    if (typeof GM_download !== 'function') return fetchAsBlob(url, filename, resolve);
+    let settled = false;
+    const finish = ok => { if (!settled) { settled = true; clearTimeout(timer); resolve(ok); } };
+    const fallback = () => fetchAsBlob(url, filename, finish);
+    const timer = setTimeout(fallback, GM_DOWNLOAD_TIMEOUT_MS);
+    try {
+      GM_download({ url, name: filename, saveAs: false, timeout: GM_DOWNLOAD_TIMEOUT_MS,
+        onload: () => finish(true), onerror: fallback, ontimeout: fallback });
+    } catch { fallback(); }
   });
 
   const fetchAsBlob = (url, filename, done) => {
@@ -695,12 +704,18 @@
     },
 
     enhance: (video) => {
-      video.dataset.tmBoosted = 'true';
       video.volume = Math.max(0, Math.min(1, TM_Config.get(CONFIG_KEYS.VIDEO_VOLUME, 0.8)));
 
-      video.addEventListener('volumechange', () => {
-        if (!video.muted) TM_Config.set(CONFIG_KEYS.VIDEO_VOLUME, video.volume);
-      });
+      // Bind the volume listener exactly once. Threads re-renders video nodes and
+      // drops the data attribute, so keying the listener off it re-attached a new
+      // closure on every scan and leaked one per pass.
+      if (!video.dataset.tmVolumeBound) {
+        video.dataset.tmVolumeBound = '1';
+        video.addEventListener('volumechange', () => {
+          if (!video.muted) TM_Config.set(CONFIG_KEYS.VIDEO_VOLUME, video.volume);
+        });
+      }
+      video.dataset.tmBoosted = 'true';
 
       const parent = video.parentElement;
       if (!parent || parent.querySelector('.tm-video-controls')) return;
@@ -878,7 +893,13 @@
       splitBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); TM_Splitter.open(textbox.innerText.trim()); };
 
       const update = () => {
-        const len = textbox.innerText.trim().length;
+        // Threads counts codepoints, not UTF-16 units. A 250-emoji post is 250
+        // characters to the server but 500 to String.length, which would warn
+        // "over 500" on a message that is actually half empty.
+        // ponytail: [...str].length handles astral chars; grapheme clusters
+        // (ZWJ emoji, flags) still overcount. Upgrade: Intl.Segmenter when the
+        // counter needs to match Threads exactly.
+        const len = [...textbox.innerText.trim()].length;
         countEl.textContent = `${len} / 500`;
         if (len === 0) { hookEl.textContent = ''; hookEl.className = 'tm-hook-status'; splitBtn.style.display = 'none'; }
         else if (len <= 180) { hookEl.textContent = '✨ Hook ปลอดภัย (ไม่ถูกซ่อนบนจอมือถือ)'; hookEl.className = 'tm-hook-status tm-hook-safe'; splitBtn.style.display = 'none'; }
@@ -906,8 +927,23 @@
           if (current) { chunks.push(current); current = ''; }
           if (p.length <= maxLen) current = p;
           else {
+            // A run with no sentence break (Thai without spaces, pasted URLs,
+            // a wall of hashtags) used to come back as one oversized chunk that
+            // Threads rejects outright, so the feature did nothing. Fall back to
+            // word, then hard slice.
             const sentences = p.split(/(?<=[.!?\n])\s+/);
             for (const s of sentences) {
+              if (s.length > maxLen) {
+                if (current) { chunks.push(current); current = ''; }
+                for (const word of s.split(/\s+/)) {
+                  if (word.length > maxLen) {
+                    for (let i = 0; i < word.length; i += maxLen) chunks.push(word.slice(i, i + maxLen));
+                  } else if ((current + (current ? ' ' : '') + word).length <= maxLen) {
+                    current = current + (current ? ' ' : '') + word;
+                  } else { if (current) chunks.push(current); current = word; }
+                }
+                continue;
+              }
               if ((current + (current ? ' ' : '') + s).length <= maxLen) current = current + (current ? ' ' : '') + s;
               else { if (current) chunks.push(current); current = s; }
             }

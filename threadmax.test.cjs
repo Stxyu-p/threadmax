@@ -561,7 +561,60 @@ for (const marker of ['downloadSingle:', 'downloadBatch:']) {
 }
 console.log('✓ Test 16: Hostile handles produce legal filenames');
 
-  console.log('\n🎉 ALL 16 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── TEST 17: composer counts codepoints, not UTF-16 units ────
+// Threads limits by codepoint. String.length counts an emoji as 2, so a
+// 250-emoji post (250 to Threads) was reported as 500 and treated as full.
+const countSrc = shipped.slice(shipped.indexOf('const update = () => {'), shipped.indexOf('const update = () => {') + 900);
+assert(countSrc.includes('[...textbox.innerText.trim()].length'),
+  'Composer must count codepoints; String.length double-counts emoji');
+
+// ─── TEST 18: GM_download timeout is real ────
+// ontimeout only fires when a timeout option is passed. Without it a stalled
+// download left the promise pending and wedged the batch loop.
+const dlSeg = shipped.slice(shipped.indexOf('const GM_DOWNLOAD_TIMEOUT_MS'), shipped.indexOf('const fetchAsBlob'));
+const call = dlSeg.slice(dlSeg.indexOf('GM_download({'));
+assert(/\btimeout:\s*GM_DOWNLOAD_TIMEOUT_MS/.test(call.slice(0, call.indexOf(');'))),
+  'GM_download must be passed an explicit timeout option');
+assert(dlSeg.includes('setTimeout(fallback'), 'A local timer must fire the fallback if GM never calls back');
+assert(dlSeg.includes('if (!settled)'), 'Resolution must be guarded so late callbacks cannot double-resolve');
+console.log('✓ Test 17-18: codepoint counter and real download timeout');
+
+// ─── TEST 19: splitter must never emit an over-limit chunk ────
+// A run with no sentence break (Thai without spaces, a pasted wall of text)
+// used to come back as one oversized chunk Threads rejects, so the button
+// silently did nothing. Word, then hard-slice, fallback added.
+// The bundle's splitText, lifted out and run for real. extractFn already walks the
+// matching brace, so reuse it instead of re-parsing the arrow header by hand.
+// extractFn strips the parameter list, so put it back around the lifted body.
+const splitFnSrc = extractFn(shipped, 'splitText: (text, maxLen = 460) =>');
+const splitText = new Function('return (' + splitFnSrc.replace('() =>', '(text, maxLen = 460) =>') + ')')();
+for (const [name, input] of [
+  ['ascii wall', 'x'.repeat(1200)],
+  ['thai no space', 'ก'.repeat(1200)],
+  ['single word', 'z'.repeat(1200)],
+  ['sentences', 'A. '.repeat(400)],
+  ['long url', 'https://x.io/' + 'a'.repeat(60) + ' ']
+]) {
+  const chunks = splitText(input, 460);
+  const max = Math.max(...chunks.map(c => c.length));
+  assert(max <= 500, name + ' produced an over-limit chunk of ' + max);
+  const kept = chunks.join('').replace(/\s/g, '').length;
+  assert.strictEqual(kept, input.replace(/\s/g, '').length, name + ' lost characters while splitting');
+}
+assert.strictEqual(splitText('short', 460).length, 1, 'Text under the limit must stay one chunk');
+console.log('✓ Test 19: Splitter caps every chunk and preserves content');
+
+// ─── TEST 20: the video volume listener must bind once ────
+// Threads re-renders video nodes and drops the data attribute, so keying the
+// listener off it attached a fresh closure on every scan and leaked one per pass.
+const vidSeg = shipped.slice(shipped.indexOf('enhance: (video)'), shipped.indexOf('/* ─── 9. SMART'));
+assert(vidSeg.includes('tmVolumeBound'), 'Volume listener needs its own persistent marker');
+const bindIdx = vidSeg.indexOf('if (!video.dataset.tmVolumeBound)');
+const volIdx = vidSeg.indexOf("addEventListener('volumechange'");
+assert(bindIdx > -1 && volIdx > bindIdx, 'volumechange must sit inside the bind-once guard');
+console.log('✓ Test 20: Video volume listener binds exactly once');
+
+  console.log('\n🎉 ALL 20 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───

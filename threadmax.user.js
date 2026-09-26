@@ -840,7 +840,7 @@
           <div class="tm-reader-header">
             <div>
               <div class="tm-reader-title">📖 Thread Unroller</div>
-              <div class="tm-reader-author">@${author} • จับได้ ${opPosts.length}${seriesTotal ? `/${seriesTotal}` : ''} โพสต์</div>
+              <div class="tm-reader-author">@${escapeHtml(author)} • จับได้ ${opPosts.length}${seriesTotal ? `/${seriesTotal}` : ''} โพสต์</div>
             </div>
             <div class="tm-reader-header-actions">
               <button type="button" class="tm-btn-primary" id="tm-copy-md">📥 คัดลอก Markdown</button>

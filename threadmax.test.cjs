@@ -657,6 +657,63 @@ assert(guardIdx > -1 && buildIdx > guardIdx,
   'The stale-controls check must run before the controls are built');
 console.log('✓ Test 20b: Video controls rebuild when the media element is replaced');
 
+// ─── TEST 14b: no raw interpolation into innerHTML ─────────────
+// The reader modal interpolated the handle straight into innerHTML while the
+// post text one line below went through escapeHtml. Audit every template that
+// lands in innerHTML and fail on any dynamic part that is not escaped or a
+// number, so a future field cannot reintroduce the same hole.
+const innerHtmlBlocks = [];
+for (const m of shipped.matchAll(/(\w+)\.innerHTML = `/g)) {
+  const start = m.index + m[0].length;
+  const end = shipped.indexOf('`;', start);
+  assert.ok(end > start, 'innerHTML template at ' + m.index + ' is unterminated');
+  innerHtmlBlocks.push({ line: shipped.slice(0, m.index).split('\n').length, body: shipped.slice(start, end) });
+}
+assert(innerHtmlBlocks.length >= 8, 'expected to audit every innerHTML assignment, found ' + innerHtmlBlocks.length);
+// Walk the interpolations with brace counting: a nested template literal such as
+// ${opPosts.map((p, idx) => `...${escapeHtml(p.text)}...`)} contains braces of its
+// own, and a naive /\$\{([^}]*)\}/ stops at the first inner }.
+function topLevelParts(body) {
+  const out = [];
+  for (let i = 0; i < body.length - 1; i++) {
+    if (body[i] !== '$' || body[i + 1] !== '{') continue;
+    let depth = 1, j = i + 2;
+    for (; j < body.length && depth; j++) {
+      if (body[j] === '{') depth++;
+      else if (body[j] === '}') depth--;
+    }
+    out.push({ expr: body.slice(i + 2, j - 1), inner: body.slice(i + 2, j - 1) });
+    i = j - 1;
+  }
+  return out;
+}
+// A nested template is checked by recursing into it; its own parts are audited too.
+const SAFE_EXPR = /^(escapeHtml\(|ext$|mode\.|String\(|i$|i \+ 1$|idx$|idx \+ 1$|total$|seriesTotal$|postData\.media\.length$|zipFiles\.length$|opPosts\.length$|selected\.size$|media\.length$|p\.text$|d\.get|pad\(|current$|chunks\.length$|pad\(n\)$)/;
+const walk = (body, line) => {
+  for (const { expr, inner } of topLevelParts(body)) {
+    const nested = inner.match(/`([\s\S]*?)`/);
+    if (nested) { walk(nested[1], line); continue; }
+    if (!/[a-zA-Z]/.test(expr)) continue;                     // pure arithmetic
+    // A .map() or a ternary that returns a template literal nests further markup,
+    // so descend into every backtick section it contains.
+    if (inner.includes('`')) {
+      for (const seg of inner.split('`').slice(1, -1)) walk(seg, line);
+      continue;
+    }
+    // A ternary guard (`x.length > 0 ? A : B`) is safe when it only decides whether
+    // to render; both branches are static markup.
+    if (/\?/.test(inner) && !/[a-zA-Z]+\.[a-zA-Z]+(?!\.length)/.test(inner.replace(/\.[a-zA-Z]+\.length/g, ''))) continue;
+    assert(SAFE_EXPR.test(expr.trim()) || /^String\(/.test(expr.trim()) || /\.length$/.test(expr.trim()),
+      `innerHTML at line ${line} interpolates \${${expr.slice(0, 60)}} without escaping it`);
+  }
+};
+for (const { line, body } of innerHtmlBlocks) walk(body, line);
+// and the specific field that was raw
+assert(shipped.includes('tm-reader-author">@${escapeHtml(author)}'),
+  'The reader modal author must be escaped like the post text is');
+console.log('✓ Test 14b: every innerHTML interpolation is escaped or numeric');
+
+
 
 // ─── TEST 21b: one pill per media item ─────────────────────────
 // The selector resolved a shared "tile" by walking up from each image. A

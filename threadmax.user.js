@@ -613,8 +613,10 @@
       const selected = new Set(media.map((_, i) => i));
 
       media.forEach((item, index) => {
-        let tile = item.element.parentElement;
-        while (tile && (tile.tagName === 'PICTURE' || tile.tagName === 'A' || tile.offsetWidth === 0)) tile = tile.parentElement;
+        // Anchor on the media element itself. A carousel puts every image inside one
+        // .media wrapper, so resolving a shared "tile" made 11 of 12 items share a
+        // single pill: the first item created it and the rest bailed on the guard.
+        const tile = item.element;
         if (!tile || tile.querySelector('.tm-checkbox-pill')) return;
 
         const pill = document.createElement('div');

@@ -638,6 +638,26 @@ const volIdx = vidSeg.indexOf("addEventListener('volumechange'");
 assert(bindIdx > -1 && volIdx > bindIdx, 'volumechange must sit inside the bind-once guard');
 console.log('✓ Test 20: Video volume listener binds exactly once');
 
+// ─── TEST 21b: one pill per media item ─────────────────────────
+// The selector resolved a shared "tile" by walking up from each image. A
+// carousel wraps every image in one .media container, so the first item created
+// the pill and the other eleven bailed out on the dedupe guard: 12 photos, one
+// checkbox, and the counter said 12/12 while only one item could be toggled.
+const selSeg = shipped.slice(shipped.indexOf('media.forEach((item, index)'), shipped.indexOf('// Walk up from our own button'));
+assert(selSeg.includes('const tile = item.element;'),
+  'Each pill must hang off its own media element, not a shared walked-up tile');
+assert(!/let tile = item\.element\.parentElement/.test(selSeg),
+  'Walking up to a parent tile collapses a carousel onto one checkbox');
+assert(selSeg.includes("if (!tile || tile.querySelector('.tm-checkbox-pill')) return;"),
+  'The dedupe guard stays, but it must now be per-item');
+// The counter is driven by the Set, not by the pill count, so a missing pill
+// would silently pass; pin the invariant that makes the count honest.
+const selIdx = shipped.indexOf('const selected = new Set(media.map');
+assert(selIdx > -1 && /new Set\(media\.map\(\(_, i\) => i\)\)/.test(shipped.slice(selIdx, selIdx + 80)),
+  'Selection must start as one entry per media item');
+console.log('✓ Test 21b: one checkbox per carousel item, counter backed by the Set');
+
+
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───
 // threadmax.user.js is the single source of truth; src/ is gone (2026-09-26).
 const repoRoot = __dirname;

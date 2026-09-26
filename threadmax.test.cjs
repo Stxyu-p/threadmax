@@ -732,6 +732,137 @@ assert(!/clipboard\.writeText\(chunks\.map/.test(shipped), 'splitter copy-all by
 assert(!/clipboard\.writeText\(cleanPostUrl/.test(shipped), 'clean link bypasses copyText');
 console.log('✓ Test 15: every copy reports success or failure, with a working fallback');
 
+// ─── TEST 17b: the composer survives a re-rendered textbox ───
+// data-tm-composer survives cloneNode, so a re-rendered composer arrives marked
+// and never gets its listeners: the counter froze at 0 while the user typed.
+// Drive the real init/enhance against a DOM that clones the textbox.
+// A const object module has no arrow head, so lift() cannot bracket it: find the
+// matching close brace directly and reassemble `const TM_Composer = {...}`.
+function liftModule(src, name) {
+  const marker = 'const ' + name + ' = {';
+  const start = src.indexOf(marker);
+  assert.ok(start > -1, marker + ' must exist in the bundle');
+  const seg = src.slice(start, start + 8000).replace(/\r\n/g, '\n');
+  let depth = 0, end = -1;
+  for (let i = seg.indexOf('{'); i < seg.length; i++) {
+    if (seg[i] === '{') depth++;
+    else if (seg[i] === '}' && --depth === 0) { end = i; break; }
+  }
+  assert.ok(end > 0, name + ' body never closed');
+  return seg.slice(0, end + 1);
+}
+const composerSeg = liftModule(shipped, 'TM_Composer');
+// A DOM just rich enough for the real init/enhance: cloneNode must copy dataset
+// (that is the whole bug) and the form must be queryable by class.
+// A DOM just rich enough for the real init/enhance. The bug needs cloneNode to copy
+// dataset while the listeners do not follow, so the stub is built around that.
+function makeComposerDom() {
+  const mk = (tag, cls) => {
+    const el = {
+      tagName: String(tag).toUpperCase(), className: cls || '', children: [],
+      dataset: {}, style: {}, _attrs: {}, _ev: {}, textContent: '',
+      setAttribute(k, v) { this._attrs[k] = v; },
+      getAttribute(k) { return this._attrs[k]; },
+      get isConnected() { return !this._removed; },
+      get innerText() { return this.textContent; },
+      // The real enhance renders the bar with innerHTML and then queries the three
+      // children inside it, so the stub must materialise them from the markup.
+      set innerHTML(html) {
+        this.children = [];
+        for (const cls of ['tm-hook-status', 'tm-split-btn', 'tm-char-count']) {
+          if (!html.includes('class="' + cls + '"')) continue;
+          const c = mk('span', cls);
+          c.textContent = cls === 'tm-char-count' ? '0 / 500' : '';
+          this.appendChild(c);
+        }
+      },
+      get innerHTML() { return ''; },
+      appendChild(c) { this.children.push(c); c.parentElement = this; return c; },
+      remove() {
+        this._removeCalls = (this._removeCalls || 0) + 1;
+        this._removed = true;
+        if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(x => x !== this);
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const wantClass = sel.startsWith('.') ? sel.slice(1) : null;
+        const wantRole = (sel.match(/role="(\w+)"/) || [])[1] || null;
+        const wantEditable = sel.includes('contenteditable') ? 'true' : null;
+        const walk = n => n.children.forEach(c => {
+          const hit = (wantClass && String(c.className).split(/\s+/).includes(wantClass)) ||
+            (wantRole && c._attrs.role === wantRole && (!wantEditable || c._attrs.contenteditable === wantEditable));
+          if (hit) out.push(c);
+          walk(c);
+        });
+        walk(this);
+        return out;
+      },
+      cloneNode() {
+        const c = mk(tag, cls);
+        c._attrs = { ...this._attrs };
+        c.dataset = { ...this.dataset };          // real DOM copies dataset
+        c.textContent = this.textContent;         // real DOM copies text
+        return c;                                 // but NOT listeners or expando props
+      },
+      addEventListener(t, fn) { this._ev[t] = (this._ev[t] || []).concat(fn); },
+      dispatchEvent(e) { (this._ev[e.type] || []).forEach(fn => fn(e)); },
+      closest(sel) {
+        const test = sel === 'form' ? n => n.tagName === 'FORM' : () => false;
+        for (let n = this; n; n = n.parentElement) if (test(n)) return n;
+        return null;
+      },
+    };
+    return el;
+  };
+  const body = mk('body'), form = mk('form'), textbox = mk('div');
+  textbox.setAttribute('role', 'textbox');
+  textbox.setAttribute('contenteditable', 'true');
+  form.appendChild(textbox);
+  body.appendChild(form);
+  // Threads replaces the textbox node in place; a re-render drops the old one.
+  const swapTextbox = () => {
+    const fresh = textbox.cloneNode(true);
+    fresh.textContent = '';
+    const at = form.children.indexOf(textbox);
+    form.children.splice(at, 1, fresh);
+    fresh.parentElement = form;
+    textbox._removed = true;
+    return fresh;
+  };
+  const document = {
+    createElement: mk, body,
+    querySelectorAll: sel => body.querySelectorAll(sel),
+    querySelector: sel => body.querySelector(sel),
+  };
+  return { document, form, textbox, mk, swapTextbox };
+}
+const comp = makeComposerDom();
+const C2 = new Function('document', 'CONFIG_KEYS', 'TM_Splitter', 'console',
+  composerSeg + '\nreturn TM_Composer;')(comp.document, { TIMESTAMP_MODE: 'x' }, { open(){} }, console);
+C2.init();
+const countOf = () => comp.form.querySelector('.tm-char-count').textContent;
+const type = (box, text) => { box.textContent = text; box.dispatchEvent({ type: 'input' }); };
+assert.ok(comp.form.querySelector('.tm-composer-bar'), 'init must attach a composer bar');
+// Each round types a DIFFERENT length, so a counter that stayed on the old bar
+// cannot pass by accident.
+type(comp.textbox, 'abc');
+assert.equal(countOf(), '3 / 500', 'baseline: the counter must track the textbox it wired');
+for (let r = 0; r < 6; r++) {
+  comp.textbox = comp.swapTextbox();
+  const barsBefore = comp.form.querySelectorAll('.tm-composer-bar').length;
+  const barTb = (comp.form.querySelector('.tm-composer-bar')||{})._tmTextbox;
+  C2.init();
+    assert.equal(comp.form.querySelectorAll('.tm-composer-bar').length, 1,
+    're-render ' + r + ': the composer bars stacked or vanished');
+  type(comp.textbox, 'ab'.repeat(r + 1).slice(0, r + 1));
+  assert.equal(countOf(), (r + 1) + ' / 500',
+    're-render ' + r + ': counter stayed at 3 — the clone kept the flag but got no listeners');
+}
+console.log('✓ Test 17b: composer counter survives a re-rendered textbox');
+
+
+
 
 
 

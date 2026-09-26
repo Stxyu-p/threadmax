@@ -906,14 +906,25 @@
 
   /* ─── 11. COMPOSER HOOK GUIDE & AUTO-SPLITTER (Phase 2) ───── */
   const TM_Composer = {
+    // ponytail: a dataset flag survives cloneNode, so a composer that Threads re-renders
+    // arrives already marked and never gets its listeners: the counter freezes at 0.
+    // The marker therefore records the node we actually wired, and init asks whether
+    // that node is still in the document.
     init: () => {
-      document.querySelectorAll('div[role="textbox"][contenteditable="true"]:not([data-tm-composer])').forEach(TM_Composer.enhance);
+      document.querySelectorAll('div[role="textbox"][contenteditable="true"]').forEach(tb => {
+        if (tb.dataset.tmComposer && tb.isConnected && tb._tmWired) return;
+        TM_Composer.enhance(tb);
+      });
     },
 
     enhance: (textbox) => {
-      textbox.dataset.tmComposer = 'true';
       const parent = textbox.closest('form') || textbox.parentElement;
-      if (!parent || parent.querySelector('.tm-composer-bar')) return;
+      if (!parent) return;
+      // A re-rendered composer leaves its bar behind. Removing it first is what
+      // lets the new node wire a live one instead of bailing out on the guard.
+      parent.querySelectorAll('.tm-composer-bar').forEach(old => { if (old._tmTextbox !== textbox) old.remove(); });
+      if (parent.querySelector('.tm-composer-bar')) return;
+      textbox.dataset.tmComposer = 'true';
 
       const bar = document.createElement('div');
       bar.className = 'tm-composer-bar';
@@ -924,6 +935,7 @@
         </div>
         <span class="tm-char-count">0 / 500</span>
       `;
+      bar._tmTextbox = textbox;
       parent.appendChild(bar);
 
       const countEl = bar.querySelector('.tm-char-count');
@@ -949,6 +961,7 @@
 
       textbox.addEventListener('input', update);
       textbox.addEventListener('keyup', update);
+      textbox._tmWired = true;
       update();
     }
   };

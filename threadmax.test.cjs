@@ -202,26 +202,33 @@ console.log('✓ Test 5: Real filename templates, 1-based, sanitised, item count
 // Test 6: Thread Unroller Markdown -- the real template from the bundle.
 // It is an inline expression, not a named function, so assert on the shipped
 // shape and render it the way the copy button does.
-const mdSeg = shipped.slice(shipped.indexOf("const md = `# Thread by"), shipped.indexOf("navigator.clipboard.writeText(md)"));
-assert(mdSeg.includes('# Thread by @${author}'), 'Markdown must name the author');
-assert(mdSeg.includes('https://www.threads.com/@${author}/post/${postId}'), 'Markdown must carry the clean post URL');
-assert(mdSeg.includes('### [${i + 1}/${opPosts.length}]'), 'Each part must be numbered 1-based over the total');
-// The bundle escapes newlines as \\n inside the template, so match that shape.
-assert(/join\('\\+n---/.test(mdSeg), 'Parts must be separated by a horizontal rule');
-assert(mdSeg.includes('${p.text}'), 'Part body must be the post text');
-// Render it for real against a synthetic thread.
-const renderMd = (author, postId, opPosts) => `# Thread by @${author}\n\nURL: https://www.threads.com/@${author}/post/${postId}\n\n---\n\n` +
-  opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\n\n${p.text}\n`).join('\n---\n\n');
-const md = renderMd('author_x', 'post_123', [
+// Render it by EXECUTING the shipped expression, not a copy of it. The old version
+// restated the template here, so it passed while the bundle emitted literal \n.
+const mdStart = shipped.indexOf('const NL = String.fromCharCode(10);');
+assert.ok(mdStart > -1, 'the unroller must build newlines from a real source');
+const mdEnd = shipped.indexOf("copyText(md,", mdStart);
+const mdExpr = shipped.slice(shipped.indexOf('const md = `# Thread by', mdStart), mdEnd).trim();
+const buildMd = new Function('author', 'postId', 'opPosts', 'const NL = String.fromCharCode(10);\n' + mdExpr + '\nreturn md;');
+const md = buildMd('author_x', 'post_123', [
   { text: 'Part 1 of the story' },
   { text: 'Part 2 continuing' },
   { text: 'Part 3 conclusion' }
 ]);
 assert(md.includes('# Thread by @author_x'), 'Markdown header missing');
-assert(md.includes('### [1/3]\n\nPart 1 of the story'), 'Part 1 missing');
+assert(md.includes('https://www.threads.com/@author_x/post/post_123'), 'Markdown must carry the clean post URL');
+assert(md.includes('### [1/3]\n\nPart 1 of the story'), 'Part 1 must be numbered and separated by real newlines');
 assert(md.includes('### [3/3]\n\nPart 3 conclusion'), 'Part 3 missing');
 assert.strictEqual((md.match(/###/g) || []).length, 3, 'Every part must be present exactly once');
-console.log('✓ Test 6: Real unroller Markdown template, 1-based parts, all posts kept');
+// Post text may bring its own newlines, so count only the ones the template owns.
+const NL = String.fromCharCode(10);
+const skeleton = md.split('Part 1 of the story').join('P1').split('Part 2 continuing').join('P2')
+  .split('Part 3 conclusion').join('P3');
+assert.strictEqual((skeleton.match(/\n/g) || []).length, 21,
+  'Every separator the template writes must be a real newline');
+assert.ok(!skeleton.includes(String.fromCharCode(92) + 'n'),
+  'the export must not contain a literal backslash-n');
+assert(/\n---\n/.test(md), 'Parts must be separated by a horizontal rule');
+console.log('✓ Test 6: the shipped Markdown export renders real headings and newlines');
 
 // Test 7: Composer hook thresholds -- read from the bundle, not restated here.
 // The bundle branches inline on `len`; these asserts pin the four real cutoffs
@@ -1107,6 +1114,7 @@ const fs2 = lift(shipped, 'findShareButtons: () =>');
 assert.ok(/if \(!postBound && \(cur\.querySelectorAll/.test(fs2),
   'without a post bound the button count may pick the row, but never over a bound');
 console.log('✓ Test 43: a button insert falls back instead of killing the scan');
+
 
 
 

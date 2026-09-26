@@ -1001,8 +1001,12 @@ getPostMetadata: (card) => {
       const close = () => { releaseFocus(); modal.remove(); readerOpener?.focus?.(); };
       const releaseFocus = tmFocusTrap(modal, close);
       modal.querySelector('#tm-copy-md').onclick = () => {
-        const md = `# Thread by @${author}\\n\\nURL: https://www.threads.com/@${author}/post/${postId}\\n\\n---\\n\\n` +
-          opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\\n\\n${p.text}\\n`).join('\\n---\\n\\n');
+        // A double backslash in a template literal is a backslash and an n, not a
+        // newline, so the exported Markdown arrived as one long line with literal
+        // \n in it: nothing downstream could render it as headings or breaks.
+        const NL = String.fromCharCode(10);
+        const md = `# Thread by @${author}${NL}${NL}URL: https://www.threads.com/@${author}/post/${postId}${NL}${NL}---${NL}${NL}` +
+          opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]${NL}${NL}${p.text}${NL}`).join(`${NL}---${NL}${NL}`);
         copyText(md, '✓ คัดลอก Markdown ทั้งเธรดแล้ว');
       };
 

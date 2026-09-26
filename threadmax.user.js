@@ -720,10 +720,20 @@
       video.dataset.tmBoosted = 'true';
 
       const parent = video.parentElement;
-      if (!parent || parent.querySelector('.tm-video-controls')) return;
+      if (!parent) return;
+      // The controls hold a closure over THIS video. When Threads swaps the node
+      // the parent and its controls survive, so the old buttons kept driving the
+      // detached video: the label said 1.5x while the new element played at 1x.
+      // Rebuild whenever the existing controls point at a different element.
+      const existing = parent.querySelector('.tm-video-controls');
+      if (existing) {
+        if (existing._tmVideo === video) return;
+        existing.remove();
+      }
 
       const ctrl = document.createElement('div');
       ctrl.className = 'tm-video-controls';
+      ctrl._tmVideo = video;
       ctrl.setAttribute('role', 'group');
       ctrl.setAttribute('aria-label', 'การควบคุมวิดีโอ');
       let speedIdx = 0;

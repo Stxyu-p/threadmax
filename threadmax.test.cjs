@@ -638,6 +638,26 @@ const volIdx = vidSeg.indexOf("addEventListener('volumechange'");
 assert(bindIdx > -1 && volIdx > bindIdx, 'volumechange must sit inside the bind-once guard');
 console.log('✓ Test 20: Video volume listener binds exactly once');
 
+// ─── TEST 20b: the controls must follow a re-created <video> ──
+// The control div holds a closure over one video element. Threads replaces that
+// element while the parent and its controls survive, so the old buttons kept
+// driving a detached node: the label read 1.5x while the new video played at 1x.
+// Rebuilding on identity mismatch keeps the label and the real playbackRate in step.
+const vEnh = shipped.slice(shipped.indexOf('enhance: (video)'), shipped.indexOf('/* ─── 9. SMART'));
+assert(vEnh.includes('existing._tmVideo === video'),
+  'Reuse the controls only when they already drive THIS video element');
+assert(vEnh.includes('existing.remove()'),
+  'Stale controls bound to a replaced video must be removed, not left in place');
+assert(/ctrl\._tmVideo = video/.test(vEnh),
+  'Controls must record which video element they drive');
+// the early return must come after the identity check, never before it
+const guardIdx = vEnh.indexOf('if (existing) {');
+const buildIdx = vEnh.indexOf("const ctrl = document.createElement('div')");
+assert(guardIdx > -1 && buildIdx > guardIdx,
+  'The stale-controls check must run before the controls are built');
+console.log('✓ Test 20b: Video controls rebuild when the media element is replaced');
+
+
 // ─── TEST 21b: one pill per media item ─────────────────────────
 // The selector resolved a shared "tile" by walking up from each image. A
 // carousel wraps every image in one .media container, so the first item created

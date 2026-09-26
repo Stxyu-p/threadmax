@@ -37,7 +37,13 @@ function lift(src, marker, restore) {
     else if (seg[i] === '}' && --depth === 0) { end = i; break; }
   }
   assert.ok(end > body, marker + ' body never closed');
-  return seg.slice(0, end + 1).replace(marker, restore);
+  let out = seg.slice(0, end + 1);
+  // `const f = (a) => new Promise((res, rej) => { ... })` closes with `});`:
+  // the paren belongs to new Promise, not to the arrow body, so keep it.
+  const tail = seg.slice(end + 1);
+  const paren = tail.match(/^\)*/)[0].length;
+  if (paren) out += ')'.repeat(paren);
+  return out.replace(marker, restore);
 }
 
 const CRC32_TABLE = new Uint32Array(256);
@@ -860,6 +866,34 @@ for (let r = 0; r < 6; r++) {
     're-render ' + r + ': counter stayed at 3 — the clone kept the flag but got no listeners');
 }
 console.log('✓ Test 17b: composer counter survives a re-rendered textbox');
+
+// ─── TEST 18: every fetch has a deadline ──────────────────────
+// A bare fetch has no deadline. One stalled CDN response left the ZIP loop
+// pending forever, the progress bar wedged at n-1/total, and the 30s watchdog
+// then deleted the bar so the user read it as a finished download.
+const fwtSeg = lift(shipped, 'const fetchWithTimeout = ', 'const fetchWithTimeout = ');
+assert(fwtSeg.includes('AbortController'), 'fetchWithTimeout must abort the request');
+assert(/setTimeout\(.*abort\(\)/.test(fwtSeg), 'fetchWithTimeout must arm an abort timer');
+// Run it: a fetch that honours the signal must reject, and the timer must clear.
+const ctlScope = new Function('fetch', 'setTimeout', 'clearTimeout', 'AbortController',
+  fwtSeg + '\nreturn fetchWithTimeout;');
+let signalSeen = null;
+const fakeFetch = (url, opts) => new Promise((_, rej) => {
+  signalSeen = opts && opts.signal;
+  signalSeen.addEventListener('abort', () => rej(new Error('aborted')));
+});
+const guarded = ctlScope(fakeFetch, (fn, ms) => { const h = setTimeout(fn, ms); fakeFetch._t = h; return h; }, clearTimeout, AbortController);
+trackAsync((async () => {
+  const armedAt = Date.now();
+  await assert.rejects(() => guarded('http://x', 120), 'a stalled fetch must reject instead of hanging forever');
+  assert(Date.now() - armedAt >= 100, 'it must wait for the deadline, not reject immediately');
+  assert(signalSeen.aborted, 'the abort signal must actually fire');
+})());
+// No network site may bypass the guard.
+const rawFetches = [...shipped.matchAll(/(?<![.\w])fetch\((?!url, \{ signal)/g)].map(m => shipped.slice(Math.max(0, m.index - 60), m.index + 40).split('\n').pop());
+assert.equal(rawFetches.length, 0, 'fetch() called without a deadline:\n' + rawFetches.join('\n'));
+console.log('✓ Test 18: every fetch is bounded by a deadline');
+
 
 
 

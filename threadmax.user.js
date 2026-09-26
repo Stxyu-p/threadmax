@@ -231,8 +231,18 @@
     } catch { fallback(); }
   });
 
+  // ponytail: AbortSignal.timeout would do, but the userscript must also run where it
+  // is missing, and this keeps the deadline in one place with GM_download.
+  const fetchWithTimeout = (url, ms) => new Promise((resolve, reject) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => { ctl.abort(); reject(new Error('timeout')); }, ms);
+    fetch(url, { signal: ctl.signal })
+      .then(r => { clearTimeout(timer); resolve(r); })
+      .catch(e => { clearTimeout(timer); reject(e); });
+  });
+
   const fetchAsBlob = (url, filename, done) => {
-    fetch(url)
+    fetchWithTimeout(url, GM_DOWNLOAD_TIMEOUT_MS)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
       .then(b => { downloadBlob(b, filename); done(true); })
       // ponytail: raw <a download> fallback cannot report result → counted as unverified/failed. Upgrade: fetch-only path.
@@ -554,7 +564,7 @@
         downloadDirect(item.url, filename);
         setTimeout(() => TM_Downloader.clearProgress(anchorBtn), 1200);
       } else {
-        fetch(item.url)
+        fetchWithTimeout(item.url, GM_DOWNLOAD_TIMEOUT_MS)
           .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
           .then(blob => { downloadBlob(blob, filename); TM_Downloader.clearProgress(anchorBtn); })
           .catch(() => { downloadDirect(item.url, filename); TM_Downloader.clearProgress(anchorBtn); });
@@ -587,7 +597,10 @@
         const item = mediaList[i];
         const ext = item.type === 'video' ? 'mp4' : 'jpg';
         try {
-          const resp = await fetch(item.url);
+          // A bare fetch has no deadline: one stalled CDN response left the loop
+          // pending forever, the bar wedged at n-1/total, and the watchdog then
+          // deleted the bar so the user read it as done with nothing downloaded.
+          const resp = await fetchWithTimeout(item.url, GM_DOWNLOAD_TIMEOUT_MS);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const buf = await resp.arrayBuffer();
           zipFiles.push({ name: `${safeFilename(author)}_${safeFilename(postId)}_${String(i + 1).padStart(3, '0')}.${ext}`, data: new Uint8Array(buf) });

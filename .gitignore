@@ -2,3 +2,6 @@
 *.png
 !shot_clean.png
 node_modules/
+
+# scratch debug scripts
+_dbg*.cjs

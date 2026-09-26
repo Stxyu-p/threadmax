@@ -415,21 +415,33 @@ function iconNode() {
 }
 const doc = (map) => ({ querySelectorAll: (sel) => map[sel] || [] });
 const HASH = 'path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]';
+const BTN_LABEL = '[role="button"][aria-label*="Share" i], [role="button"][aria-label*="\u0e41\u0e0a\u0e23\u0e4c"]';
+const SVG_LABEL = 'svg[title*="Share" i], svg[title*="\u0e41\u0e0a\u0e23\u0e4c"], svg[aria-label*="Share" i], svg[aria-label*="\u0e41\u0e0a\u0e23\u0e4c"]';
 
-// 1. Primary: path hash present.
+// 1. Primary layer: labelled share button, icon geometry irrelevant.
+const byLabel = runFinder(doc({ [BTN_LABEL]: [iconNode()] }));
+assert.strictEqual(byLabel.length, 1, 'labelled share button must be found regardless of icon path');
+assert.strictEqual(byLabel[0].actionRow.tagName, 'DIV', 'actionRow is the button grandparent');
+
+// 2. Second layer: label on the svg, button itself unlabelled.
+const bySvgLabel = runFinder(doc({ [SVG_LABEL]: [iconNode()] }));
+assert.strictEqual(bySvgLabel.length, 1, 'svg-level Share label must resolve');
+
+// 3. Last layer: no label anywhere, only the legacy icon path.
 const byHash = runFinder(doc({ [HASH]: [iconNode()] }));
-assert.strictEqual(byHash.length, 1, 'path hash must locate one action row');
-assert.strictEqual(byHash[0].actionRow.tagName, 'DIV', 'actionRow is the button grandparent');
+assert.strictEqual(byHash.length, 1, 'path hash must remain as the final fallback');
 
-// 2. Meta ships a new icon path: the semantic fallback must still resolve.
-const LABEL = 'svg[title*="Share" i], svg[title*="\u0e41\u0e0a\u0e23\u0e4c"], svg[aria-label*="Share" i], svg[aria-label*="\u0e41\u0e0a\u0e23\u0e4c"]';
-const byLabel = runFinder(doc({ [LABEL]: [iconNode()] }));
-assert.strictEqual(byLabel.length, 1, 'aria-label Share fallback must survive an icon change');
+// 4. Layers short-circuit: a semantic hit means the hash query is never issued.
+let hashQueried = false;
+const spyDoc = { querySelectorAll: (sel) => { if (sel === HASH) hashQueried = true; return sel === BTN_LABEL ? [iconNode()] : []; } };
+const spied = runFinder(spyDoc);
+assert.strictEqual(spied.length, 1);
+assert.strictEqual(hashQueried, false, 'hash layer must not run once a semantic match exists');
 
-// 3. Unrecognised DOM: zero results, never a throw.
+// 5. Unrecognised DOM: zero results, never a throw.
 assert.strictEqual(runFinder(doc({})).length, 0, 'unknown DOM must yield zero results');
 
-console.log('\u2713 Test 28: Real bundle findShareButtons (hash primary, label fallback, safe empty)');
+console.log('\u2713 Test 28: Real bundle findShareButtons (label -> svg-label -> path hash, safe empty)');
 
 // ─── TEST 29: Progress Watchdog Auto-Cleanup Contract ──────────
 class MockProgressManager {

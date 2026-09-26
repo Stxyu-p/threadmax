@@ -227,24 +227,34 @@
       return candidates[0]?.url || img.src;
     },
 
+    // Layered so a Meta redesign degrades one step instead of killing every feature.
+    // ponytail: 3 layers. Ceiling: a full rebrand that changes the label text AND the icon
+    // geometry would still miss; upgrade: let users pin a selector from the menu.
     findShareButtons: () => {
       const res = [];
-      const paths = document.querySelectorAll('path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]');
-      paths.forEach(p => {
-        const svg = p.closest('svg'), btn = svg?.closest('[role="button"]') || svg?.parentElement;
+      const collect = (icon) => {
+        const svg = icon.closest('svg') || (icon.tagName?.toLowerCase() === 'svg' ? icon : null);
+        const btn = svg?.closest('[role="button"]') || svg?.parentElement;
         const wrapper = btn?.parentElement, actionRow = wrapper?.parentElement;
         if (btn && wrapper && actionRow && !res.some(r => r.shareBtn === btn)) {
           res.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
         }
-      });
+      };
+
+      // 1. Semantic: the share button is always the labelled one, whatever icon it draws.
+      document.querySelectorAll('[role="button"][aria-label*="Share" i], [role="button"][aria-label*="แชร์"]').forEach(collect);
+
+      // 2. Icon geometry: covers feeds where the label sits on the svg, not the button.
       if (res.length === 0) {
-        document.querySelectorAll('svg[title*="Share" i], svg[title*="แชร์"], svg[aria-label*="Share" i], svg[aria-label*="แชร์"]').forEach(svg => {
-          const btn = svg.closest('[role="button"]') || svg.parentElement, wrapper = btn?.parentElement, actionRow = wrapper?.parentElement;
-          if (btn && wrapper && actionRow && !res.some(r => r.shareBtn === btn)) {
-            res.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
-          }
-        });
+        document.querySelectorAll('svg[title*="Share" i], svg[title*="แชร์"], svg[aria-label*="Share" i], svg[aria-label*="แชร์"]').forEach(collect);
       }
+
+      // 3. Path hash: the pre-2026 fallback, kept because it costs one query and has
+      //    survived every icon refresh so far.
+      if (res.length === 0) {
+        document.querySelectorAll('path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]').forEach(collect);
+      }
+
       return res;
     },
 
@@ -1064,10 +1074,22 @@
   }
 
   let scanTimer = null;
+  // A silent no-op is the worst failure mode here: the buttons simply never appear and the
+  // user has no idea why. Warn once per session, then stay quiet so it cannot nag on scroll.
+  let selectorMissWarned = false;
+  function warnIfSelectorMissed(found) {
+    if (found > 0 || selectorMissWarned) return;
+    selectorMissWarned = true;
+    console.warn('[ThreadMax] No post action row found. If the buttons never appear, the Threads DOM has changed and the selector needs updating.');
+    showToast('⚠️ ThreadMax: หาแถวปุ่มโพสต์ไม่พบ (เว็บอาจเปลี่ยนโครงสร้าง)');
+  }
+
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(() => {
-      TM_DOM.findShareButtons().forEach(TM_Buttons.injectIntoActionRow);
+      const actionRows = TM_DOM.findShareButtons();
+      warnIfSelectorMissed(actionRows.length);
+      actionRows.forEach(TM_Buttons.injectIntoActionRow);
       TM_Video.init();
       TM_Timestamp.updateAll();
       TM_Composer.init();

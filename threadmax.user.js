@@ -353,19 +353,22 @@
       return res;
     },
 
-                            findPostCard: (node) => {
-      // The card must hold THIS post and nothing else. Two failure modes, both seen:
-      // stopping at DIV.actions, which carries the post link but no images, made
-      // every post look empty; climbing to the widest ancestor merged the whole feed
-      // so all 41 posts reported the same first image. The post's own box is the
-      // outermost ancestor that still contains exactly one post link.
+                                findPostCard: (node) => {
+      // The card must hold THIS post and nothing else. Three failure modes, all
+      // seen: stopping at DIV.actions, which carries the post link but no images,
+      // made every post look empty; climbing to the widest ancestor merged the whole
+      // feed so all 41 posts reported the same first image; and a post that carries
+      // no post link at all (a video post, a post still loading) fell through to a
+      // bare parentElement.parentElement, which reached into a neighbour's media.
       let cur = node, card = null;
       while (cur && cur !== document.body) {
         if (cur.querySelectorAll('a[href*="/post/"]').length === 1) card = cur;
         else if (card) break;                       // the next post starts here
         cur = cur.parentElement;
       }
-      return card || node.parentElement?.parentElement || node;
+      // No post link anywhere above: stay inside the article rather than reaching
+      // for a parent that can cover half the feed.
+      return card || node.closest?.('article') || node.parentElement?.parentElement || node;
     },
 
 getPostMetadata: (card) => {

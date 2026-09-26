@@ -1070,6 +1070,21 @@ const tsWrites = (tsSeg.match(/timeEl\.innerText = /g) || []).length;
 assert.equal(tsWrites, 1, 'there is exactly one timestamp write site, guarded: ' + tsWrites);
 console.log('✓ Test 41: an unchanged timestamp is not rewritten');
 
+// ─── TEST 42: a post with no post link must not borrow a neighbour's media ──
+// With no a[href*="/post/"] anywhere above the action row, the climb found nothing
+// and fell back to node.parentElement.parentElement: on a 3-post fixture that
+// wrapper held the NEXT post's video, so a post with no media of its own still got
+// a checkbox pill for a file that belonged to someone else.
+const cardSeg2 = lift(shipped, 'findPostCard: (node) => {');
+assert.ok(/node\.closest\?\.\('article'\)/.test(cardSeg2),
+  'a card with no post link must stay inside its own article');
+// The bare grandparent fallback is what reached across posts. It may remain only as
+// a last resort after the article, never on its own.
+const fb = cardSeg2.slice(cardSeg2.indexOf('return card ||'));
+assert.ok(fb.indexOf("closest?.('article')") < fb.indexOf('node.parentElement?.parentElement'),
+  'the article bound must be tried before the loose grandparent fallback');
+console.log('✓ Test 42: a post without a link stays inside its own article');
+
 
 
 

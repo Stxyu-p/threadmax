@@ -946,6 +946,19 @@ assert.equal(hardcoded.length, 0, 'the hardcoded jpg suffix is back at offset ' 
 assert.equal((shipped.match(/= mediaExtension\(item\);/g) || []).length, 3,
   'every download path must build the name through mediaExtension');
 
+// ─── TEST 35: no popup-window retry behind a failed download ──
+// A <a target="_blank"> retry fires long after the click gesture, so the popup
+// blocker swallows it: the user is told "12 failed" and gets no file, no tab and
+// no explanation. The catch must report the failure, nothing more.
+const fetchAsBlobSeg = lift(shipped, 'const fetchAsBlob = (url, filename, done) => {');
+assert.equal((fetchAsBlobSeg.match(/target\s*=\s*'_blank'/g) || []).length, 0,
+  'fetchAsBlob must not open a window on failure');
+assert.equal((fetchAsBlobSeg.match(/window\.open/g) || []).length, 0,
+  'fetchAsBlob must not call window.open on failure');
+assert.ok(/\.catch\([\s\S]*done\(false\)/.test(fetchAsBlobSeg),
+  'a failed download must be reported through done(false)');
+console.log('✓ Test 35: a failed download reports instead of opening junk tabs');
+
 
 
 

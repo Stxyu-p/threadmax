@@ -241,12 +241,14 @@
       .catch(e => { clearTimeout(timer); reject(e); });
   });
 
+// ponytail: no <a target="_blank"> retry. It runs long after the user gesture, so the
+// popup blocker eats every one of them, and where it does not the user gets a dozen junk
+// tabs instead of a download. Report the failure honestly instead.
   const fetchAsBlob = (url, filename, done) => {
     fetchWithTimeout(url, GM_DOWNLOAD_TIMEOUT_MS)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
       .then(b => { downloadBlob(b, filename); done(true); })
-      // ponytail: raw <a download> fallback cannot report result → counted as unverified/failed. Upgrade: fetch-only path.
-      .catch(() => { try { const a = document.createElement('a'); a.href = url; a.download = filename; a.target = '_blank'; document.body.appendChild(a); a.click(); a.remove(); } catch {} done(false); });
+      .catch(e => { console.warn('[ThreadMax] download failed:', url, e); done(false); });
   };
 
   const cleanPostUrl = url => {

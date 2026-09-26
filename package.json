@@ -1,7 +1,7 @@
 {
   "name": "threadmax",
   "version": "1.0.0",
-  "description": "<div align=\"center\">",
+  "description": "Precision media downloader, video booster, clean link, smart timestamps and thread unroller for Threads Web",
   "main": "threadmax.user.js",
   "scripts": {
     "test": "node threadmax.test.cjs"
@@ -10,22 +10,20 @@
     "type": "git",
     "url": "git+https://github.com/Stxyu-p/threadmax.git"
   },
-  "keywords": [],
+  "keywords": [
+    "threads",
+    "userscript",
+    "media-downloader",
+    "video-speed",
+    "zip",
+    "greasyfork",
+    "tampermonkey"
+  ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/Stxyu-p/threadmax/issues"
   },
-  "homepage": "https://github.com/Stxyu-p/threadmax#readme",
-  "devDependencies": {
-    "@rollup/plugin-commonjs": "^29.0.3",
-    "@rollup/plugin-node-resolve": "^16.0.3",
-    "@rollup/plugin-typescript": "^12.3.0",
-    "autoprefixer": "^10.6.1",
-    "postcss": "^8.5.28",
-    "postcss-nested": "^8.0.1",
-    "rollup": "^4.63.4",
-    "typescript": "^7.0.2"
-  }
+  "homepage": "https://github.com/Stxyu-p/threadmax#readme"
 }

@@ -1,3 +1,4 @@
-# Ignore temporary screenshots
+# Ignore ad-hoc screenshots, but keep the one the README embeds.
 *.png
+!shot_clean.png
 node_modules/

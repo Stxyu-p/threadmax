@@ -4,12 +4,12 @@
 
 **Precision Media Downloader, Native Video Booster, Thread Unroller & Composer Toolkit for Threads Web**
 
-*Anti-Slop Minimal Precision · Zero Dependencies · In-Memory ZIP32 · 100% Client-Side Privacy*  
+*Anti-Slop Minimal Precision / Zero Dependencies / In-Memory ZIP32 / 100% Client-Side Privacy*  
 *Engineered for [threads.net](https://www.threads.net/) & [threads.com](https://www.threads.com/)*
 
-[![Version: v1.4.0](https://img.shields.io/badge/Version-v1.4.0-10b981?style=for-the-badge)](https://github.com/Stxyu-p/threadmax)
-[![Platform: Threads Web](https://img.shields.io/badge/Platform-threads.net-black?style=for-the-badge&logo=threads&logoColor=white)](https://www.threads.net/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=for-the-badge)](LICENSE)
+[![Version: v1.4.0](https://img.shields.io/badge/Version-v1.4.0-10b981?style=flat-square)](https://github.com/Stxyu-p/threadmax)
+[![Platform: Threads Web](https://img.shields.io/badge/Platform-threads.net-black?style=flat-square&logo=threads&logoColor=white)](https://www.threads.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](LICENSE)
 
 ![Dependencies: Zero](https://img.shields.io/badge/Dependencies-Zero-success?style=flat-square)
 ![Engine: Vanilla JS](https://img.shields.io/badge/Engine-Pure%20ES2022-cyan?style=flat-square)
@@ -67,7 +67,7 @@ Traditional browser downloaders rely on bulky multi-megabyte dependencies like J
 2. Install **ThreadMax**:
    - Install directly via GitHub Raw:  
      👉 **[Install threadmax.user.js](https://raw.githubusercontent.com/Stxyu-p/threadmax/main/threadmax.user.js)**
-3. Navigate to [threads.net](https://www.threads.net/) or [threads.com](https://www.threads.com/) — the ⬇ download trigger appears inline on every post with media.
+3. Navigate to [threads.net](https://www.threads.net/) or [threads.com](https://www.threads.com/) - the ⬇ download trigger appears inline on every post with media.
 
 ---
 
@@ -83,6 +83,20 @@ Customize via the Tampermonkey menu:
 
 ---
 
+## ♿ Accessibility Contract
+
+The injected controls are keyboard-first, not mouse-only:
+
+| Control | Keyboard behavior |
+| :--- | :--- |
+| Injected action buttons | `role="button"` + `tabindex="0"`, activate on **Enter** and **Space** |
+| Reader and Splitter modals | `role="dialog"` + `aria-modal`, **Tab** and **Shift+Tab** stay trapped inside, **Esc** closes, focus returns to the opener |
+| Video controller | `role="group"` with labelled speed and PiP buttons |
+| Progress bar | `role="progressbar"` with live `aria-valuenow` |
+| Toasts | `role="status"` + `aria-live="polite"` |
+
+---
+
 ## 🧪 Verification & Test Suite
 
 Run syntax check and local tests:
@@ -94,6 +108,10 @@ node --check threadmax.user.js
 # 2. Automated test suite
 node threadmax.test.cjs
 ```
+
+The suite has no dependencies. It covers the ZIP32 byte layout, URL sanitization, timestamp formatting, Markdown export, composer thresholds, the scope regression gate (removed features must not return), and the accessibility contract of the shipped bundle.
+
+> `threadmax.user.js` is the single source of truth. There is no build step and no `src/` directory: what you read is exactly what runs.
 
 ---
 

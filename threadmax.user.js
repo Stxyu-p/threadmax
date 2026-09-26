@@ -161,6 +161,25 @@
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); fn(e); }
   });
 
+  // P0 (a11y): keep Tab inside an open modal instead of walking into the feed behind it.
+  // ponytail: only wraps first/last; ceiling is that a focusable element added after open can
+  // escape. Upgrade: recompute the focusable list on each Tab.
+  const tmFocusTrap = (modal, onEscape) => {
+    const SEL = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); onEscape(); return; }
+      if (e.key !== 'Tab') return;
+      const f = modal.querySelectorAll(SEL);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1], active = document.activeElement;
+      const inside = active && modal.contains(active);
+      if (e.shiftKey && (!inside || active === first)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (!inside || active === last)) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  };
+
   const downloadBlob = (blob, filename) => {
     const url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = filename; document.body.appendChild(a); a.click();
@@ -659,11 +678,14 @@
 
       const ctrl = document.createElement('div');
       ctrl.className = 'tm-video-controls';
+      ctrl.setAttribute('role', 'group');
+      ctrl.setAttribute('aria-label', 'การควบคุมวิดีโอ');
       let speedIdx = 0;
 
+      // Static template literal: no user or network data is interpolated, so innerHTML is safe here.
       ctrl.innerHTML = `
-        <button type="button" class="tm-video-btn tm-speed-btn" title="คลิกสลับความเร็ว">1.0x</button>
-        <button type="button" class="tm-video-btn tm-pip-btn" title="Picture-in-Picture">
+        <button type="button" class="tm-video-btn tm-speed-btn" title="คลิกสลับความเร็ว" aria-label="ความเร็ววิดีโอ">1.0x</button>
+        <button type="button" class="tm-video-btn tm-pip-btn" title="Picture-in-Picture" aria-label="Picture-in-Picture">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="4" width="20" height="16" rx="2"></rect>
             <rect x="13" y="11" width="7" height="7" rx="1" fill="currentColor"></rect>
@@ -785,10 +807,8 @@
       document.body.appendChild(modal);
       modal.querySelector('#tm-close-reader')?.focus();
 
-      const close = () => { document.removeEventListener('keydown', onEsc); modal.remove(); readerOpener?.focus?.(); };
-      const onEsc = (e) => { if (e.key === 'Escape') close(); };
-      document.addEventListener('keydown', onEsc);
-
+      const close = () => { releaseFocus(); modal.remove(); readerOpener?.focus?.(); };
+      const releaseFocus = tmFocusTrap(modal, close);
       modal.querySelector('#tm-copy-md').onclick = () => {
         const md = `# Thread by @${author}\\n\\nURL: https://www.threads.com/@${author}/post/${postId}\\n\\n---\\n\\n` +
           opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\\n\\n${p.text}\\n`).join('\\n---\\n\\n');
@@ -924,11 +944,10 @@
 
       modal.querySelector('#tm-close-split').onclick = closeSplit;
       modal.querySelector('.tm-reader-overlay').onclick = closeSplit;
-      document.addEventListener('keydown', onEscSplit);
+      let releaseSplitFocus = tmFocusTrap(modal, closeSplit);
       modal.querySelector('#tm-close-split')?.focus();
 
-      function closeSplit() { document.removeEventListener('keydown', onEscSplit); modal.remove(); splitOpener?.focus?.(); }
-      function onEscSplit(e) { if (e.key === 'Escape') closeSplit(); }
+      function closeSplit() { releaseSplitFocus(); modal.remove(); splitOpener?.focus?.(); }
     }
   };
 

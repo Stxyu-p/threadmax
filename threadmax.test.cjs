@@ -489,29 +489,11 @@ setTimeout(() => {
 }, 150);
 
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───
+// threadmax.user.js is the single source of truth; src/ is gone (2026-09-26).
 const repoRoot = __dirname;
-const sourceRoot = path.join(repoRoot, 'src');
-
-function collectFiles(root, suffix) {
-  const files = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) files.push(...collectFiles(full, suffix));
-    else if (entry.name.endsWith(suffix)) files.push(full);
-  }
-  return files;
-}
-
-const productionFiles = [
-  path.join(repoRoot, 'threadmax.user.js'),
-  ...collectFiles(sourceRoot, '.ts'),
-];
-const documentationFiles = [path.join(repoRoot, 'README.md'), path.join(repoRoot, 'SPEC_IDEA.md')];
-const removedFiles = [
-  path.join(sourceRoot, 'features', 'viral.ts'),
-  path.join(sourceRoot, 'features', 'auditor', 'db.ts'),
-  path.join(sourceRoot, 'features', 'auditor', 'graphql.ts'),
-];
+const productionFiles = [path.join(repoRoot, 'threadmax.user.js')];
+const documentationFiles = [path.join(repoRoot, 'README.md')];
+const removedFiles = ['src/features/viral.ts', 'src/features/auditor/db.ts', 'src/features/auditor/graphql.ts'];
 const removedTokens = [
   'TM_ViralRadar', 'TM_RelationshipAuditor', 'TM_Studio', 'TM_Sniffer', 'TM_DB',
   'VIRAL_RADAR', 'FILTER_RISING', 'STUDIO_LAUNCHER', 'STUDIO_DRAWER', 'FEED_FILTER_BAR',
@@ -522,8 +504,8 @@ const removedTokens = [
   'Mutual Auditor', 'Growth Intelligence', 'IndexedDB Snapshot',
 ];
 
-for (const file of removedFiles) {
-  assert(!fs.existsSync(file), `Removed source file still exists: ${path.relative(repoRoot, file)}`);
+for (const rel of removedFiles) {
+  assert(!fs.existsSync(path.join(repoRoot, rel)), `Removed source file still exists: ${rel}`);
 }
 for (const file of [...productionFiles, ...documentationFiles]) {
   const text = fs.readFileSync(file, 'utf8');
@@ -531,11 +513,13 @@ for (const file of [...productionFiles, ...documentationFiles]) {
     assert(!text.includes(token), `Removed feature token ${token} remains in ${path.relative(repoRoot, file)}`);
   }
 }
-for (const required of ['threadmax.user.js', 'src/features/downloader.ts', 'src/features/unroller.ts', 'src/features/composer.ts', 'src/features/video.ts', 'src/features/timestamp.ts']) {
-  assert(fs.existsSync(path.join(repoRoot, required)), `Required core artifact missing: ${required}`);
-}
+assert(!fs.existsSync(path.join(repoRoot, 'src')), 'src/ must be gone: the bundle is the only source of truth');
 const shipped = fs.readFileSync(path.join(repoRoot, 'threadmax.user.js'), 'utf8');
 for (const retained of ['TM_Buttons', 'TM_Unroller', 'TM_Composer', 'TM_Video', 'TM_Timestamp']) {
   assert(shipped.includes(retained), `Retained core module missing from shipped bundle: ${retained}`);
 }
+// P0 a11y that lived only in the deleted src/: the shipped bundle must trap Tab in both modals.
+assert(shipped.includes('tmFocusTrap'), 'Focus trap helper missing from shipped bundle');
+assert(shipped.includes("role', 'group'"), 'Video controls must expose role=group');
 console.log('✓ Scope regression: removed features absent; retained core artifacts present');
+console.log('✓ Single-source gate: src/ deleted, bundle is the only implementation');

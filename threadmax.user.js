@@ -316,12 +316,21 @@
         // test alone matched a wrapper spanning two posts, so both posts shared one
         // action row: the second post never got its buttons, and a re-scan of the
         // first post was written into the row the second post owned.
+        // The climb needs a ceiling. With none, the loop walked up to the feed
+        // container, all 41 posts resolved to the same action row, and a row that
+        // holds every post means no post can own a button. Only a real post
+        // container counts: the wrapper would be the button's own cell, which
+        // stops the climb before it starts.
         const postBound = btn?.closest?.('[data-pressable-container="true"], article') || null;
         let actionRow = wrapper?.parentElement;
         for (let cur = actionRow, up = 0; cur && cur !== document.body && up < 4; cur = cur.parentElement, up++) {
-          if (postBound && cur === postBound) break;
+          if (postBound && cur === postBound) { actionRow = cur; break; }
           if ((cur.querySelectorAll('[role="button"]').length || 0) > 1) { actionRow = cur; break; }
+          // No post container in sight: keep the row as wide as the button's own
+          // siblings, never wider.
+          if (!postBound && cur.parentElement === document.body) { actionRow = wrapper?.parentElement; break; }
         }
+        if (postBound && actionRow !== postBound && !postBound.contains(actionRow)) actionRow = postBound;
         if (btn && wrapper && actionRow && !res.some(r => r.shareBtn === btn)) {
           res.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
         }
@@ -344,21 +353,22 @@
       return res;
     },
 
-    findPostCard: (node) => {
-      let cur = node;
+                            findPostCard: (node) => {
+      // The card must hold THIS post and nothing else. Two failure modes, both seen:
+      // stopping at DIV.actions, which carries the post link but no images, made
+      // every post look empty; climbing to the widest ancestor merged the whole feed
+      // so all 41 posts reported the same first image. The post's own box is the
+      // outermost ancestor that still contains exactly one post link.
+      let cur = node, card = null;
       while (cur && cur !== document.body) {
-        if (cur.getAttribute?.('data-pressable-container') === 'true' || cur.tagName === 'ARTICLE') return cur;
+        if (cur.querySelectorAll('a[href*="/post/"]').length === 1) card = cur;
+        else if (card) break;                       // the next post starts here
         cur = cur.parentElement;
       }
-      cur = node;
-      while (cur && cur !== document.body) {
-        if (cur.querySelector?.('a[href*="/post/"]')) return cur;
-        cur = cur.parentElement;
-      }
-      return node.parentElement?.parentElement || node;
+      return card || node.parentElement?.parentElement || node;
     },
 
-    getPostMetadata: (card) => {
+getPostMetadata: (card) => {
       const postLinkEl = card.querySelector('a[href*="/post/"]');
       let author = 'threads_user', postId = Date.now().toString(36), postUrl = window.location.href;
 

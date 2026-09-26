@@ -1020,6 +1020,21 @@ assert.ok(/if \(!dropdown\.isConnected\) return;/.test(ddSeg),
   'the deferred listener registration must skip a menu that was closed');
 console.log('✓ Test 38: the dropdown closes on Escape and returns focus');
 
+// ─── TEST 39: every post on a feed must get its own card and its own buttons ──
+// findPostCard stopped at DIV.actions, which carries the post link but no images:
+// 41 posts on the feed, 40 with photos, and not one download button. Climbing to
+// the widest ancestor instead merged the feed, so all 41 reported the same image.
+const cardSeg = lift(shipped, 'findPostCard: (node) => {');
+assert.ok(/querySelectorAll\('a\[href\*="\/post\/"\]'\)\.length === 1/.test(cardSeg),
+  'the card must be the ancestor holding exactly one post link');
+// A card that spans two posts would report the first post's media for both.
+assert.ok(/else if \(card\) break;/.test(cardSeg),
+  'the climb must stop at the boundary between two posts');
+// The bounds must stop at the body, or one bad fixture makes the loop run away.
+assert.ok(/cur && cur !== document\.body/.test(cardSeg),
+  'the climb must be bounded by document.body');
+console.log('✓ Test 39: each post on a feed resolves to its own card');
+
 
 
 

@@ -713,6 +713,26 @@ assert(shipped.includes('tm-reader-author">@${escapeHtml(author)}'),
   'The reader modal author must be escaped like the post text is');
 console.log('✓ Test 14b: every innerHTML interpolation is escaped or numeric');
 
+// ─── TEST 15: every copy reports the path that actually ran ───
+// navigator.clipboard.writeText rejects on an unfocused document, a denied
+// permission and an insecure origin. The old code did .then(showToast) with no
+// rejection handler, so the click did nothing and the reader assumed it worked.
+const copyTextSeg = lift(shipped, 'const copyText = ', '\n  };');
+assert(/execCommandCopy\(text\) \? done\(\)/.test(copyTextSeg) || /execCommandCopy\(text\)\s*\?\s*done\(\)/.test(copyTextSeg),
+  'copyText must report success when the execCommand fallback runs, not just when it copies');
+assert(!/\.then\(done, \(\) => \{ if \(!execCommandCopy/.test(copyTextSeg),
+  'copyText still swallows the fallback success');
+// no bare clipboard write survives outside copyText
+const bare = [...shipped.matchAll(/navigator\.clipboard\.writeText\(/g)];
+assert.equal(bare.length, 1, 'expected exactly one clipboard.writeText, inside copyText; found ' + bare.length);
+for (const site of ['tm-copy-md', 'tm-copy-chunk', 'tm-copy-all-split']) {
+  assert(shipped.includes(site), 'the ' + site + ' control disappeared');
+}
+assert(!/clipboard\.writeText\(chunks\.map/.test(shipped), 'splitter copy-all bypasses copyText');
+assert(!/clipboard\.writeText\(cleanPostUrl/.test(shipped), 'clean link bypasses copyText');
+console.log('✓ Test 15: every copy reports success or failure, with a working fallback');
+
+
 
 
 // ─── TEST 21b: one pill per media item ─────────────────────────

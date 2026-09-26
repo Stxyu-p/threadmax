@@ -156,6 +156,34 @@
     t._timer = setTimeout(() => t.classList.remove('tm-toast-visible'), ms);
   };
 
+  const execCommandCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    return ok;
+  };
+
+  // The async clipboard API is blocked on insecure origins, in unfocused documents and
+  // wherever the user denied the permission. execCommand is deprecated but still the
+  // only zero-dependency path that works there, so the copy must never depend on it.
+  const copyText = (text, okMsg = '✓ คัดลอกแล้ว') => {
+    const done = () => showToast(okMsg);
+    const fail = () => showToast('⚠️ คัดลอกไม่สำเร็จ กลิก clipboard ถูกขอางไว้');
+    if (navigator.clipboard?.writeText) {
+      // Rejecting is the common case, not the edge case: unfocused document, denied
+      // permission or an insecure origin all land here. Report whichever path ran.
+      navigator.clipboard.writeText(text).then(done, () => execCommandCopy(text) ? done() : fail());
+      return;
+    }
+    if (execCommandCopy(text)) done(); else fail();
+  };
+
   // P0 (a11y): div[role=button] must activate on Enter/Space like native buttons.
   const tmKeyActivate = (el, fn) => el.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); fn(e); }
@@ -416,7 +444,7 @@
 
       const onLinkAction = (e) => {
         e.preventDefault(); e.stopPropagation();
-        navigator.clipboard.writeText(cleanPostUrl(postUrl)).then(() => showToast('✓ คัดลอกลิงก์สะอาดแล้ว')).catch(() => showToast('⚠️ เข้าถึง Clipboard ไม่ได้'));
+        copyText(cleanPostUrl(postUrl), '✓ คัดลอกลิงก์สะอาดแล้ว');
       };
       linkBtn.addEventListener('click', onLinkAction);
       tmKeyActivate(linkBtn, onLinkAction);
@@ -868,7 +896,7 @@
       modal.querySelector('#tm-copy-md').onclick = () => {
         const md = `# Thread by @${author}\\n\\nURL: https://www.threads.com/@${author}/post/${postId}\\n\\n---\\n\\n` +
           opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\\n\\n${p.text}\\n`).join('\\n---\\n\\n');
-        navigator.clipboard.writeText(md).then(() => showToast('✓ คัดลอก Markdown ทั้งเธรดแล้ว'));
+        copyText(md, '✓ คัดลอก Markdown ทั้งเธรดแล้ว');
       };
 
       modal.querySelector('#tm-close-reader').onclick = close;
@@ -1011,12 +1039,12 @@
       modal.querySelectorAll('.tm-copy-chunk').forEach(btn => {
         btn.onclick = () => {
           const idx = parseInt(btn.dataset.index, 10);
-          navigator.clipboard.writeText(`${idx + 1}/${total}\n\n${chunks[idx]}`).then(() => showToast(`✓ คัดลอกท่อนที่ ${idx + 1}/${total} แล้ว`));
+          copyText(`${idx + 1}/${total}\n\n${chunks[idx]}`, `✓ คัดลอกท่อนที่ ${idx + 1}/${total} แล้ว`);
         };
       });
 
       modal.querySelector('#tm-copy-all-split').onclick = () => {
-        navigator.clipboard.writeText(chunks.map((c, i) => `[${i + 1}/${total}]\n${c}`).join('\n\n---\n\n')).then(() => showToast('✓ คัดลอกเธรดทั้งหมด'));
+        copyText(chunks.map((c, i) => `[${i + 1}/${total}]\n${c}`).join('\n\n---\n\n'), '✓ คัดลอกเธรดทั้งหมด');
       };
 
       modal.querySelector('#tm-close-split').onclick = closeSplit;

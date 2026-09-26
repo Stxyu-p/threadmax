@@ -300,7 +300,7 @@
     // Layered so a Meta redesign degrades one step instead of killing every feature.
     // ponytail: 3 layers. Ceiling: a full rebrand that changes the label text AND the icon
     // geometry would still miss; upgrade: let users pin a selector from the menu.
-    findShareButtons: () => {
+        findShareButtons: () => {
       const res = [];
       const collect = (icon) => {
         // The icon may be the button itself, or the svg nested inside it.
@@ -319,13 +319,27 @@
         // The climb needs a ceiling. With none, the loop walked up to the feed
         // container, all 41 posts resolved to the same action row, and a row that
         // holds every post means no post can own a button. Only a real post
-        // container counts: the wrapper would be the button's own cell, which
-        // stops the climb before it starts.
-        const postBound = btn?.closest?.('[data-pressable-container="true"], article') || null;
+        // container counts.
+        // A single action cell is pressable itself, so closest() stops there and
+        // the ceiling arrives before the climb does: the loop never sees a row with
+        // more than one button and leaves actionRow on that one cell. Reach for the
+        // cell's siblings too, and let the article be the hard ceiling.
+        // Walk up past every pressable box that cannot hold a post of its own, and
+        // stop at the article. A share cell is itself pressable, so closest() on
+        // pressable alone lands there and the row with the other action buttons is
+        // never reached: that post got no buttons at all.
+        let postBound = null;
+        for (let cur = wrapper, up = 0; cur && cur !== document.body && up < 6; cur = cur.parentElement, up++) {
+          if (cur.tagName === 'ARTICLE') { postBound = cur; break; }
+          if (cur.getAttribute?.('data-pressable-container') === 'true' && (cur.querySelectorAll('[role="button"]').length || 0) > 1) { postBound = cur; break; }
+        }
         let actionRow = wrapper?.parentElement;
-        for (let cur = actionRow, up = 0; cur && cur !== document.body && up < 4; cur = cur.parentElement, up++) {
+        for (let cur = actionRow, up = 0; cur && cur !== document.body && up < 5; cur = cur.parentElement, up++) {
+          // The ceiling wins over the button count. The action row itself holds
+          // four buttons, so testing it first stopped the climb one level short of
+          // the article and the post's media was never inside actionRow at all.
           if (postBound && cur === postBound) { actionRow = cur; break; }
-          if ((cur.querySelectorAll('[role="button"]').length || 0) > 1) { actionRow = cur; break; }
+          if (!postBound && (cur.querySelectorAll('[role="button"]').length || 0) > 1) { actionRow = cur; break; }
           // No post container in sight: keep the row as wide as the button's own
           // siblings, never wider.
           if (!postBound && cur.parentElement === document.body) { actionRow = wrapper?.parentElement; break; }
@@ -353,15 +367,19 @@
       return res;
     },
 
-                                findPostCard: (node) => {
+    findPostCard: (node) => {
       // The card must hold THIS post and nothing else. Three failure modes, all
       // seen: stopping at DIV.actions, which carries the post link but no images,
       // made every post look empty; climbing to the widest ancestor merged the whole
       // feed so all 41 posts reported the same first image; and a post that carries
       // no post link at all (a video post, a post still loading) fell through to a
       // bare parentElement.parentElement, which reached into a neighbour's media.
+      // The ceiling is the article: on the current DOM the action row and the media
+      // are siblings under it, so a card that stops at the row sees no media at all
+      // and a video-only post never gets a download button.
       let cur = node, card = null;
       while (cur && cur !== document.body) {
+        if (cur.tagName === 'ARTICLE') { card = cur; break; }
         if (cur.querySelectorAll('a[href*="/post/"]').length === 1) card = cur;
         else if (card) break;                       // the next post starts here
         cur = cur.parentElement;
@@ -483,7 +501,12 @@ getPostMetadata: (card) => {
         tmKeyActivate(dlBtn, onDlAction);
 
         dlWrapper.appendChild(dlBtn);
-        actionRow.insertBefore(dlWrapper, shareWrapper.nextSibling);
+        // shareWrapper has to be a child of the box we insert into. actionRow is now
+        // the whole article, and the share cell sits deeper than one level, so
+        // insertBefore(dlWrapper, shareWrapper.nextSibling) throws NotFoundError and
+        // takes the whole scan with it: no post on the page gets a button.
+        if (shareWrapper.parentElement === actionRow) actionRow.insertBefore(dlWrapper, shareWrapper.nextSibling);
+        else actionRow.appendChild(dlWrapper);
       }
 
       // 2. Clean Link Button
@@ -510,8 +533,13 @@ getPostMetadata: (card) => {
         tmKeyActivate(linkBtn, onLinkAction);
 
         linkWrapper.appendChild(linkBtn);
-        const targetAnchor = actionRow.querySelector('.tm-download-btn')?.parentElement || shareWrapper;
-        actionRow.insertBefore(linkWrapper, targetAnchor.nextSibling);
+        // The anchor must be a child of actionRow. A download button that survived a
+        // re-render of an inner row can sit outside the box we are writing into, and
+        // insertBefore then throws NotFoundError, which killed the whole scan: no post
+        // on the page got a button. Anchor on the share cell we already hold.
+        const anchor = shareWrapper.parentElement === actionRow ? shareWrapper : null;
+        if (anchor) actionRow.insertBefore(linkWrapper, anchor.nextSibling);
+        else actionRow.appendChild(linkWrapper);
       }
 
       // 3. Unroll Thread Button (When on post detail or OP thread)

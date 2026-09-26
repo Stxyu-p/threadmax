@@ -1085,6 +1085,29 @@ assert.ok(fb.indexOf("closest?.('article')") < fb.indexOf('node.parentElement?.p
   'the article bound must be tried before the loose grandparent fallback');
 console.log('✓ Test 42: a post without a link stays inside its own article');
 
+// ─── TEST 43: a button insert must never throw and kill the whole scan ──
+// actionRow became the article so the post's media is inside it, but the share cell
+// sits deeper than one level. insertBefore(x, shareWrapper.nextSibling) then threw
+// NotFoundError, the forEach loop had no try/catch, and one post left every other
+// post on the page without a button.
+const inj = lift(shipped, 'injectIntoActionRow: (shareInfo) => {');
+// Every insertBefore has to sit behind a "is the anchor my child" test, and every
+// such test has an appendChild fallback, or the throw still reaches the scan loop.
+const guardedInserts = (inj.match(/if \([^)]*\)[^\n]*\.insertBefore\(/g) || []).length;
+const rawInserts = (inj.match(/\.insertBefore\(/g) || []).length;
+assert.equal(rawInserts, guardedInserts,
+  'every insertBefore in injectIntoActionRow must be behind a child check: ' + rawInserts + ' vs ' + guardedInserts);
+const childChecked = (inj.match(/parentElement === actionRow/g) || []).length;
+assert.ok(childChecked >= 2, 'both the download and the link button must check the anchor is a child');
+assert.ok(/else actionRow\.appendChild\(dlWrapper\)/.test(inj), 'the download button needs an appendChild fallback');
+assert.ok(/else actionRow\.appendChild\(linkWrapper\)/.test(inj), 'the link button needs an appendChild fallback');
+// The action row must be capped at the article: the row itself holds four buttons,
+// so the button-count test stops the climb one level short of the media.
+const fs2 = lift(shipped, 'findShareButtons: () =>');
+assert.ok(/if \(!postBound && \(cur\.querySelectorAll/.test(fs2),
+  'without a post bound the button count may pick the row, but never over a bound');
+console.log('✓ Test 43: a button insert falls back instead of killing the scan');
+
 
 
 

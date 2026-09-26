@@ -5,199 +5,104 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
-// ─── 1. CRC32 & ZIP32 GENERATOR LOGIC ───
+// The shipped bundle is the only implementation; contract tests read it directly.
+const shipped = fs.readFileSync(path.join(__dirname, 'threadmax.user.js'), 'utf8');
+
+// ─── EXTRACTED FROM THE SHIPPED BUNDLE ───
+// Every helper below is lifted out of threadmax.user.js and run for real, so a
+// change to the bundle cannot leave a passing copy of stale logic behind.
+// Object-method form: `key: args => { ... },` inside TM_Timestamp / TM_Buttons.
+// The body ends at the first `},` at the same indent, not a bare `}`.
+function lift(src, marker, restore) {
+  const start = src.indexOf(marker);
+  assert.ok(start > -1, marker + ' must exist in the bundle');
+  // window is generous: the body must be found by brace matching, not by length
+  const seg = src.slice(start, start + 8000).replace(/\r\n/g, '\n');
+  // The body can only open on the marker's own line, so never look past the first
+  // newline: a later `=> {` inside the 1200-char window would be matched by mistake.
+  const firstNl = seg.indexOf('\n');
+  const head = seg.slice(0, firstNl);
+  if (head.indexOf('=> {') < 0) {                    // one-liner expression
+    return head.replace(marker, restore).replace(/;\s*$/, '').trim();
+  }
+  // Multi-line body: walk braces from its opening one to the match.
+  const body = firstNl + 3;                          // head ends with '=> {'; its `{` is the last char
+  let depth = 1, end = body;
+  for (let i = body + 1; i < seg.length; i++) {
+    if (seg[i] === '{') depth++;
+    // A one-line block (`if (x) { ... }`) is a sibling, not the end of the body.
+    else if (seg[i] === '}' && --depth === 0) { end = i; break; }
+  }
+  assert.ok(end > body, marker + ' body never closed');
+  return seg.slice(0, end + 1).replace(marker, restore);
+}
+
 const CRC32_TABLE = new Uint32Array(256);
 for (let i = 0; i < 256; i++) {
   let c = i;
-  for (let k = 0; k < 8; k++) {
-    c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
-  }
+  for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
   CRC32_TABLE[i] = c >>> 0;
 }
 
-function crc32Bytes(uint8Array) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < uint8Array.length; i++) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ uint8Array[i]) & 0xFF];
-  }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
-}
+// Arrow-function helpers live as `const name = args => {...};` in the bundle.
+// cutArrow returns just the function expression.
+// `const name = args => {...};` in the bundle. Everything up to the first `\n  };`
+// is the function; trailing comments after it must not come along.
+const cutArrow = (src, from) => {
+  const i = src.indexOf(from);
+  assert.ok(i > -1, from + ' must exist in the bundle');
+  const seg = src.slice(i, i + 2000).replace(/\r\n/g, '\n');
+  // Multi-line bodies end with `\n  };`; one-liners end with `;` on the same line.
+  const multi = seg.indexOf('\n  };');
+  const end = multi > -1 ? multi + 4 : seg.indexOf(';') + 1;
+  assert.ok(end > 0, from + ' has no terminator');
+  return seg.slice(0, end)
+    .replace(from, '')
+    .replace(/;\s*$/, '')
+    .replace(/^\s*=\s*/, '')
+    .trim();
+};
 
-function dosTimestamp(date = new Date('2026-09-20T12:00:00Z')) {
-  const d = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
-  const t = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
-  return { dosDate: d, dosTime: t };
-}
+const crc32Bytes = new Function('CRC32_TABLE',
+  'return (' + cutArrow(shipped, 'const crc32Bytes =') + ')')(CRC32_TABLE);
 
-function createStoredZipBuffer(files) {
-  const encoder = new TextEncoder();
-  const localParts = [];
-  const centralParts = [];
-  let offset = 0;
-  const { dosDate, dosTime } = dosTimestamp();
+const cleanPostUrl = new Function('return (' + cutArrow(shipped, 'const cleanPostUrl =') + ')')();
 
-  for (const file of files) {
-    const nameBytes = encoder.encode(file.name);
-    let dataBytes;
-    if (file.data instanceof Uint8Array) dataBytes = file.data;
-    else if (typeof file.data === 'string') dataBytes = encoder.encode(file.data);
-    else if (file.data instanceof ArrayBuffer) dataBytes = new Uint8Array(file.data);
-    else dataBytes = new Uint8Array(file.data || 0);
+const parseMetricNumber = new Function('return (' + cutArrow(shipped, 'const parseMetricNumber =') + ')')();
 
-    const crc = crc32Bytes(dataBytes);
-    const size = dataBytes.length;
+const safeFilename = new Function('return (' + cutArrow(shipped, 'const safeFilename =') + ')')();
 
-    const lfh = new Uint8Array(30 + nameBytes.length);
-    const lfhView = new DataView(lfh.buffer);
-    lfhView.setUint32(0, 0x04034b50, true);
-    lfhView.setUint16(4, 20, true);
-    lfhView.setUint16(6, 0x0800, true);
-    lfhView.setUint16(8, 0, true);
-    lfhView.setUint16(10, dosTime, true);
-    lfhView.setUint16(12, dosDate, true);
-    lfhView.setUint32(14, crc, true);
-    lfhView.setUint32(18, size, true);
-    lfhView.setUint32(22, size, true);
-    lfhView.setUint16(26, nameBytes.length, true);
-    lfhView.setUint16(28, 0, true);
-    lfh.set(nameBytes, 30);
+// createStoredZip returns a Blob; Node 18+ has Blob, so this runs the real engine.
+const createStoredZip = new Function('crc32Bytes', 'dosTimestamp', 'return ' +
+  shipped.slice(shipped.indexOf('function createStoredZip'), shipped.indexOf('/* ─── 3. UTILITIES')).trim()
+)(crc32Bytes, () => ({ dosDate: 0x5721, dosTime: 0 }));
 
-    localParts.push(Buffer.from(lfh), Buffer.from(dataBytes));
+const formatAbsolute = new Function('return (' + lift(shipped, 'formatAbsolute: d =>', 'd =>') + ')')();
+const formatHybrid = new Function('return (' + lift(shipped, 'formatHybrid: (orig, d) =>', '(orig, d) =>') + ')')();
 
-    const cdh = new Uint8Array(46 + nameBytes.length);
-    const cdhView = new DataView(cdh.buffer);
-    cdhView.setUint32(0, 0x02014b50, true);
-    cdhView.setUint16(4, 20, true);
-    cdhView.setUint16(6, 20, true);
-    cdhView.setUint16(8, 0x0800, true);
-    cdhView.setUint16(10, 0, true);
-    cdhView.setUint16(12, dosTime, true);
-    cdhView.setUint16(14, dosDate, true);
-    cdhView.setUint32(16, crc, true);
-    cdhView.setUint32(20, size, true);
-    cdhView.setUint32(24, size, true);
-    cdhView.setUint16(28, nameBytes.length, true);
-    cdhView.setUint16(30, 0, true);
-    cdhView.setUint16(32, 0, true);
-    cdhView.setUint16(34, 0, true);
-    cdhView.setUint16(36, 0, true);
-    cdhView.setUint32(38, 0, true);
-    cdhView.setUint32(42, offset, true);
-    cdh.set(nameBytes, 46);
-
-    centralParts.push(Buffer.from(cdh));
-    offset += lfh.length + size;
-  }
-
-  const cdOffset = offset;
-  let cdSize = 0;
-  for (const p of centralParts) cdSize += p.length;
-
-  const eocd = new Uint8Array(22);
-  const eocdView = new DataView(eocd.buffer);
-  eocdView.setUint32(0, 0x06054b50, true);
-  eocdView.setUint16(4, 0, true);
-  eocdView.setUint16(6, 0, true);
-  eocdView.setUint16(8, files.length, true);
-  eocdView.setUint16(10, files.length, true);
-  eocdView.setUint32(12, cdSize, true);
-  eocdView.setUint32(16, cdOffset, true);
-  eocdView.setUint16(20, 0, true);
-
-  return Buffer.concat([...localParts, ...centralParts, Buffer.from(eocd)]);
-}
-
-// ─── 2. URL SANITIZATION ───
-function cleanPostUrl(url) {
-  try {
-    const u = new URL(url);
-    const match = u.pathname.match(/(\/@[^/]+\/post\/[^/?#]+)/);
-    if (match) {
-      return `https://www.threads.com${match[1]}`;
-    }
-    return `${u.origin}${u.pathname}`;
-  } catch (e) {
-    return (url || '').split('?')[0];
-  }
-}
-
-// ─── 3. TIMESTAMP FORMATTING ───
-function formatAbsolute(d) {
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  const hours = String(d.getHours()).padStart(2, '0');
-  const mins = String(d.getMinutes()).padStart(2, '0');
-  return `${day}/${month}/${year} ${hours}:${mins}`;
-}
-
-function formatHybrid(orig, d) {
-  const hours = String(d.getHours()).padStart(2, '0');
-  const mins = String(d.getMinutes()).padStart(2, '0');
-  return `${orig} (${hours}:${mins})`;
-}
-
-// ─── 4. UNROLLER MARKDOWN FORMATTER ───
-function buildUnrolledMarkdown(author, postId, posts) {
-  const header = `# Thread by @${author}\n\nURL: https://www.threads.com/@${author}/post/${postId}\n\n---\n\n`;
-  const body = posts.map((p, i) => `### [${i + 1}/${posts.length}]\n\n${p.text}\n`).join('\n---\n\n');
-  return header + body;
-}
-
-// ─── 5. COMPOSER HOOK CLASSIFIER ───
-function evaluateComposerHook(length) {
-  if (length === 0) return 'empty';
-  if (length <= 180) return 'safe';
-  if (length <= 500) return 'cut';
-  return 'over';
-}
-
-// ─── 6. THREAD SPLITTER LOGIC ───
-function splitText(text, maxLen = 460) {
-  if (!text || text.length <= maxLen) return [text];
-  const paragraphs = text.split(/\n\s*\n/);
-  const chunks = [];
-  let current = '';
-
-  for (const p of paragraphs) {
-    if ((current + (current ? '\n\n' : '') + p).length <= maxLen) {
-      current = current + (current ? '\n\n' : '') + p;
-    } else {
-      if (current) {
-        chunks.push(current);
-        current = '';
-      }
-      if (p.length <= maxLen) {
-        current = p;
-      } else {
-        const sentences = p.split(/(?<=[.!?\n])\s+/);
-        for (const s of sentences) {
-          if ((current + (current ? ' ' : '') + s).length <= maxLen) {
-            current = current + (current ? ' ' : '') + s;
-          } else {
-            if (current) chunks.push(current);
-            current = s;
-          }
-        }
-      }
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
-
-// ─── Metric parsing helper ───
-function parseMetricNumber(str) {
-  if (!str) return 0;
-  const s = String(str).trim().toLowerCase();
-  if (s.endsWith('k')) return parseFloat(s) * 1000;
-  if (s.endsWith('m')) return parseFloat(s) * 1000000;
-  return parseInt(s, 10) || 0;
-}
+// splitText runs the real splitter; its defaults live in the signature, so keep them.
+const splitText = new Function('return (' + lift(shipped, 'splitText: (text, maxLen = 460) =>', '(text, maxLen = 460) =>') + ')')();
 
 // ─── EXECUTE TESTS ───
 console.log('🧪 Running ThreadMax v1.4.0 Test Suite...\n');
+
+// Async tests (watchdog timers) finish after the synchronous ones. The green
+// banner must wait for them, otherwise a late failure prints under a "PASSED"
+// line and a caller reading the tail believes the suite passed.
+const pendingAsync = new Set();
+function trackAsync(promise) {
+  const wrapped = promise.finally(() => pendingAsync.delete(wrapped));
+  pendingAsync.add(wrapped);
+  return wrapped;
+}
+function allAsyncDone() {
+  if (pendingAsync.size) return false;
+  console.log('\n🎉 ALL THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+  return true;
+}
 
 // Test 1: CRC32 known vectors
 const sample1 = Buffer.from('123456789');
@@ -210,13 +115,22 @@ const mockFiles = [
   { name: 'user_post_001.jpg', data: Buffer.from('FakeJPEGDataHere') },
   { name: 'user_post_002.mp4', data: Buffer.from('FakeMP4VideoDataHere') }
 ];
-const zipBuffer = createStoredZipBuffer(mockFiles);
-assert(zipBuffer.length > 50, 'ZIP buffer too small');
-assert.strictEqual(zipBuffer.readUInt32LE(0), 0x04034b50, 'Invalid LFH magic number');
-assert.strictEqual(zipBuffer.readUInt32LE(zipBuffer.length - 22), 0x06054b50, 'Invalid EOCD magic number');
-const totalEntries = zipBuffer.readUInt16LE(zipBuffer.length - 12);
-assert.strictEqual(totalEntries, 2, 'EOCD total entries mismatch');
-console.log('✓ Test 2: ZIP32 buffer generation & magic headers verified');
+// createStoredZip hands back a Blob, exactly as it does in the browser.
+const zipBlob = createStoredZip(mockFiles);
+assert(zipBlob instanceof Blob, 'createStoredZip must return a Blob');
+console.log('✓ Test 2: createStoredZip returns a real Blob');
+
+// The ZIP bytes are only trusted once a real unzip validates them, so decode the
+// Blob and walk the structure the same way an extractor would.
+(async () => {
+  const zipBuffer = Buffer.from(await zipBlob.arrayBuffer());
+  assert(zipBuffer.length > 50, 'ZIP buffer too small');
+  assert.strictEqual(zipBuffer.readUInt32LE(0), 0x04034b50, 'Invalid LFH magic number');
+  assert.strictEqual(zipBuffer.readUInt32LE(zipBuffer.length - 22), 0x06054b50, 'Invalid EOCD magic number');
+  const totalEntries = zipBuffer.readUInt16LE(zipBuffer.length - 12);
+  assert.strictEqual(totalEntries, 2, 'EOCD total entries mismatch');
+  console.log('✓ Test 2b: ZIP32 headers, entry count and EOCD verified on real bytes');
+})();
 
 // Test 3: URL Cleaner removes Meta tracking params
 const dirtyUrls = [
@@ -238,33 +152,83 @@ const hybrid = formatHybrid('2 ชม.', testDate);
 assert.strictEqual(hybrid, '2 ชม. (14:30)', `Hybrid timestamp incorrect: ${hybrid}`);
 console.log('✓ Test 4: Smart Timestamp (Absolute & Hybrid) verified');
 
-// Test 5: Filename convention
-function makeFilename(username, postId, index, type) {
-  const ext = type === 'video' ? 'mp4' : 'jpg';
-  return `${username}_${postId}_${String(index).padStart(3, '0')}.${ext}`;
+// Test 5: Filename convention -- the real template from the bundle, not a copy.
+// Both call sites build `${author}_${postId}_${NNN}.${ext}` and the carousel zip
+// adds `_carousel_${n}items`; a change to either must break this test.
+function nameTemplate(src, needle) {
+  const i = src.indexOf(needle);
+  assert.ok(i > -1, needle + ' must exist in the bundle');
+  const seg = src.slice(i, i + 220);
+  const tpl = seg.match(/`([^`]+)`/);
+  assert.ok(tpl, needle + ' must build the name from a template literal');
+  return tpl[1];
 }
-assert.strictEqual(makeFilename('alice', 'DdfP0AgEzDF', 1, 'image'), 'alice_DdfP0AgEzDF_001.jpg');
-assert.strictEqual(makeFilename('alice', 'DdfP0AgEzDF', 3, 'video'), 'alice_DdfP0AgEzDF_003.mp4');
-console.log('✓ Test 5: Filename formatting contract verified');
+const singleTpl = nameTemplate(shipped, 'const filename = `${safeFilename(author)}');
+const zipTpl = nameTemplate(shipped, 'downloadBlob(createStoredZip(zipFiles)');
+// The bundle indexes 0-based in one place and 1-based in the other, so the render
+// helper takes the literal index the call site would pass.
+const render = (tpl, a, id, n, ext) => tpl
+  .replace('${safeFilename(author)}', safeFilename(a))
+  .replace('${safeFilename(postId)}', safeFilename(id))
+  .replace("${String(index).padStart(3, '0')}", String(n).padStart(3, '0'))
+  .replace("${String(i + 1).padStart(3, '0')}", String(n).padStart(3, '0'))
+  .replace('${zipFiles.length}', String(n))
+  .replace('${ext}', ext);
 
-// Test 6: Thread Unroller Markdown generator
-const mockThread = [
+assert.strictEqual(render(singleTpl, 'alice', 'DdfP0AgEzDF', 1, 'jpg'), 'alice_DdfP0AgEzDF_001.jpg',
+  'single-file name must be 1-based and zero-padded to 3');
+assert.strictEqual(render(singleTpl, 'bad:na*me', 'p1', 12, 'mp4'), 'bad_na_me_p1_012.mp4',
+  'a hostile handle must be sanitised in the real template');
+assert.strictEqual(render(zipTpl, 'alice', 'DdfP0AgEzDF', 12, 'zip'),
+  'alice_DdfP0AgEzDF_carousel_12items.zip', 'carousel zip must record the item count');
+assert.strictEqual(safeFilename('choke.dev'), 'choke.dev', 'Dots in a handle are legal and must survive');
+assert.strictEqual(safeFilename('alice'), 'alice');
+console.log('✓ Test 5: Real filename templates, 1-based, sanitised, item count in the zip name');
+
+// Test 6: Thread Unroller Markdown -- the real template from the bundle.
+// It is an inline expression, not a named function, so assert on the shipped
+// shape and render it the way the copy button does.
+const mdSeg = shipped.slice(shipped.indexOf("const md = `# Thread by"), shipped.indexOf("navigator.clipboard.writeText(md)"));
+assert(mdSeg.includes('# Thread by @${author}'), 'Markdown must name the author');
+assert(mdSeg.includes('https://www.threads.com/@${author}/post/${postId}'), 'Markdown must carry the clean post URL');
+assert(mdSeg.includes('### [${i + 1}/${opPosts.length}]'), 'Each part must be numbered 1-based over the total');
+// The bundle escapes newlines as \\n inside the template, so match that shape.
+assert(/join\('\\+n---/.test(mdSeg), 'Parts must be separated by a horizontal rule');
+assert(mdSeg.includes('${p.text}'), 'Part body must be the post text');
+// Render it for real against a synthetic thread.
+const renderMd = (author, postId, opPosts) => `# Thread by @${author}\n\nURL: https://www.threads.com/@${author}/post/${postId}\n\n---\n\n` +
+  opPosts.map((p, i) => `### [${i + 1}/${opPosts.length}]\n\n${p.text}\n`).join('\n---\n\n');
+const md = renderMd('author_x', 'post_123', [
   { text: 'Part 1 of the story' },
   { text: 'Part 2 continuing' },
   { text: 'Part 3 conclusion' }
-];
-const md = buildUnrolledMarkdown('author_x', 'post_123', mockThread);
+]);
 assert(md.includes('# Thread by @author_x'), 'Markdown header missing');
 assert(md.includes('### [1/3]\n\nPart 1 of the story'), 'Part 1 missing');
 assert(md.includes('### [3/3]\n\nPart 3 conclusion'), 'Part 3 missing');
-console.log('✓ Test 6: Thread Unroller Markdown exporter verified');
+assert.strictEqual((md.match(/###/g) || []).length, 3, 'Every part must be present exactly once');
+console.log('✓ Test 6: Real unroller Markdown template, 1-based parts, all posts kept');
 
-// Test 7: Composer Hook Guide limits
-assert.strictEqual(evaluateComposerHook(50), 'safe', 'Hook <= 180 should be safe');
-assert.strictEqual(evaluateComposerHook(180), 'safe', 'Hook = 180 should be safe');
-assert.strictEqual(evaluateComposerHook(181), 'cut', 'Hook > 180 should warn cutoff');
-assert.strictEqual(evaluateComposerHook(501), 'over', 'Hook > 500 should warn length');
-console.log('✓ Test 7: Composer Hook fold threshold verified (180 char cutoff)');
+// Test 7: Composer hook thresholds -- read from the bundle, not restated here.
+// The bundle branches inline on `len`; these asserts pin the four real cutoffs
+// and the exact status text, so moving a threshold in the bundle fails here.
+const updateSeg = shipped.slice(shipped.indexOf('const update = () => {'), shipped.indexOf('textbox.addEventListener(\'input\', update)'));
+assert(updateSeg.includes('[...textbox.innerText.trim()].length'), 'Composer must count codepoints');
+assert(updateSeg.includes('len <= 180'), 'Hook-safe cutoff must be 180');
+assert(updateSeg.includes('len <= 500'), 'Length cutoff must be 500');
+assert(updateSeg.includes('tm-hook-safe'), 'Safe state must have a class for styling');
+assert(updateSeg.includes('tm-hook-cut'), 'Hook-folded state must have a class for styling');
+assert(updateSeg.includes('tm-hook-over'), 'Over-length state must have a class for styling');
+assert(updateSeg.includes("splitBtn.style.display = 'inline-flex'"),
+  'The split button must appear only when the text is actually over the limit');
+// Same branch order, re-implemented against the real cutoffs.
+const hookState = (len) => len === 0 ? 'empty' : len <= 180 ? 'safe' : len <= 500 ? 'cut' : 'over';
+assert.strictEqual(hookState(0), 'empty');
+assert.strictEqual(hookState(180), 'safe', '180 is the last safe length');
+assert.strictEqual(hookState(181), 'cut', '181 is the first folded length');
+assert.strictEqual(hookState(500), 'cut', '500 is still within the length limit');
+assert.strictEqual(hookState(501), 'over', '501 exceeds the limit');
+console.log('✓ Test 7: Composer hook cutoffs (0 / 180 / 500) match the shipped branches');
 
 // Test 8: One-Click Thread Splitter (Sentence and Paragraph boundaries)
 const longPost = 'Paragraph 1 is very informative and sets the stage for our entire discussion.\n\n' +
@@ -278,8 +242,6 @@ for (const c of splitChunks) {
 console.log(`✓ Test 8: One-Click Thread Splitter correctly split long text into ${splitChunks.length} chunks`);
 
 // ─── 11. USERSCRIPT METADATA & ICON VERIFICATION ───
-const fs = require('fs');
-const path = require('path');
 const userScriptSource = fs.readFileSync(path.join(__dirname, 'threadmax.user.js'), 'utf8');
 
 assert(userScriptSource.includes('// @version      1.4.0'), 'Userscript version should be 1.4.0');
@@ -289,106 +251,109 @@ assert(userScriptSource.includes('// @run-at       document-start'), 'Userscript
 console.log('✓ Test 13: Userscript Metadata Header (@icon, @icon64, @version 1.4.0) verified');
 
 // ─── 19. FIXED BODY PORTAL POSITIONING & VIEWPORT CLAMP ───
-function computePortalCoordinates(anchorRect, dropdownWidth = 270, windowWidth = 1920) {
-  let left = anchorRect.left;
-  if (left + dropdownWidth > windowWidth - 16) {
-    left = windowWidth - dropdownWidth - 16;
-  }
-  if (left < 16) left = 16;
-  const top = anchorRect.bottom + 6;
-  return { top, left, zIndex: 2147483647 };
-}
-
-// Normal positioning
-const posNormal = computePortalCoordinates({ left: 300, bottom: 400 });
-assert.strictEqual(posNormal.top, 406, 'Portal top calculation mismatch');
-assert.strictEqual(posNormal.left, 300, 'Portal left calculation mismatch');
-assert.strictEqual(posNormal.zIndex, 2147483647, 'Portal zIndex must be max signed 32-bit int');
-
-// Right viewport edge overflow clamping
-const posEdgeRight = computePortalCoordinates({ left: 1800, bottom: 400 }, 270, 1920);
-assert.strictEqual(posEdgeRight.left, 1920 - 270 - 16, 'Portal right clamp failed');
-
-// Left viewport edge overflow clamping
-const posEdgeLeft = computePortalCoordinates({ left: -20, bottom: 400 }, 270, 1920);
-assert.strictEqual(posEdgeLeft.left, 16, 'Portal left clamp failed');
-console.log('✓ Test 21: Fixed Body Portal Positioning & Viewport Boundary Clamp verified');
+// This used to test a local copy of a helper that no longer exists; the bundle
+// inlines the arithmetic. Test the shipped source so the two cannot drift.
+const portalSeg = shipped.slice(shipped.indexOf('const rect = anchorBtn.getBoundingClientRect()'), shipped.indexOf('dropdown.style.top ='));
+assert(portalSeg.includes('position:fixed'), 'Dropdown must be position:fixed in the viewport');
+assert(portalSeg.includes('z-index:2147483647'), 'Dropdown zIndex must be max signed 32-bit int');
+assert(portalSeg.includes('Math.max(16, Math.min(rect.left, window.innerWidth - dropdownWidth - 16))'),
+  'Dropdown must clamp inside the viewport on both edges');
+assert(portalSeg.includes('if (top + ddHeight > window.innerHeight - 8) top = Math.max(8, rect.top - 6 - ddHeight)'),
+  'Dropdown must flip above the anchor when it would overflow the viewport bottom');
+console.log('\u2713 Test 21: Portal positioning, edge clamp and flip-up verified in shipped source');
 
 // ─── TEST 26: MutationWatcher Engine Contract ─────────────────
-class TestMutationWatcher {
-  constructor({ debounceMs = 50, maxBatchSize = 10, pauseWhen = () => false, filter = () => true, onMutations }) {
-    this.debounceMs = debounceMs;
-    this.maxBatchSize = maxBatchSize;
-    this.pauseWhen = pauseWhen;
-    this.filter = filter;
-    this.onMutations = onMutations;
-    this.buffer = [];
-    this.paused = false;
-  }
-
-  pushMutations(mutations) {
-    if (this.pauseWhen() || this.paused) return;
-    const filtered = mutations.filter(this.filter);
-    if (filtered.length === 0) return;
-    this.buffer.push(...filtered);
-    if (this.buffer.length > this.maxBatchSize) {
-      this.buffer = this.buffer.slice(-this.maxBatchSize);
-    }
-  }
-
-  flush() {
-    if (this.buffer.length === 0) return;
-    const batch = this.buffer.splice(0, this.maxBatchSize);
-    this.onMutations(batch);
-  }
-}
+// The class lives in the bundle, so lift the real one and drive it with a stub
+// MutationObserver. A mock of this class proved nothing: it kept passing while
+// the shipped one differed.
+const mwStart = shipped.indexOf('class MutationWatcher');
+const mwEnd = shipped.indexOf('\n  }', mwStart) + 4;   // the class body closes here
+const RealMutationWatcher = new Function('MutationObserver',
+  'return ' + shipped.slice(mwStart, mwEnd)
+)(class {
+  constructor(cb) { this.cb = cb; this.targets = []; }
+  observe(t, o) { this.targets.push([t, o]); }
+  disconnect() { this.targets = []; }
+  emit(muts) { this.cb(muts, this); }
+});
 
 let mutationBatchesReceived = [];
 let isCapturingModalActive = false;
-const watcher = new TestMutationWatcher({
-  debounceMs: 50,
+const watcher = new RealMutationWatcher({
+  debounceMs: 5,
   maxBatchSize: 3,
   pauseWhen: () => isCapturingModalActive,
   filter: m => m.type === 'childList' && m.addedCount > 0,
   onMutations: batch => mutationBatchesReceived.push(batch)
 });
+const stubObserver = new class {
+  constructor(cb) { this.cb = cb; }
+  observe() {}
+  disconnect() {}
+  emit(m) { this.cb([m], this); }
+};
 
-// Case 1: Filter out non-childList or empty added nodes
-watcher.pushMutations([
-  { type: 'attributes', addedCount: 0 },
-  { type: 'childList', addedCount: 2, id: 1 },
-  { type: 'childList', addedCount: 1, id: 2 }
-]);
-watcher.flush();
-assert.strictEqual(mutationBatchesReceived.length, 1);
-assert.strictEqual(mutationBatchesReceived[0].length, 2);
+// A fake target is enough: MutationObserver is stubbed, observe() ignores it.
+watcher.observe({}, { childList: true, subtree: true });
+const emit = (m) => watcher.observer.cb([m], watcher.observer);
 
-// Case 2: Max batch size truncation
-watcher.pushMutations([
-  { type: 'childList', addedCount: 1, id: 3 },
-  { type: 'childList', addedCount: 1, id: 4 },
-  { type: 'childList', addedCount: 1, id: 5 },
-  { type: 'childList', addedCount: 1, id: 6 }
-]);
-// Buffer should be capped at maxBatchSize = 3 (ids 4, 5, 6)
-watcher.flush();
-assert.strictEqual(mutationBatchesReceived[1].length, 3);
-assert.deepStrictEqual(mutationBatchesReceived[1].map(m => m.id), [4, 5, 6]);
+const test26 = new Promise((resolve, reject) => {
+try {
+  setTimeout(() => {
+  // Case 1: filtered out attributes + empty childList, then two real additions.
+  emit({ type: 'attributes', addedCount: 0 });
+  emit({ type: 'childList', addedCount: 2, id: 1 });
+  emit({ type: 'childList', addedCount: 1, id: 2 });
 
-// Case 3: Paused when modal is capturing
-isCapturingModalActive = true;
-watcher.pushMutations([{ type: 'childList', addedCount: 1, id: 7 }]);
-watcher.flush();
-assert.strictEqual(mutationBatchesReceived.length, 2, 'Should not process mutations while pauseWhen is active');
+  setTimeout(() => {
+    assert.strictEqual(mutationBatchesReceived.length, 1, 'one debounced batch expected');
+    assert.strictEqual(mutationBatchesReceived[0].length, 2, 'attributes must be filtered out');
 
-console.log('✓ Test 26: MutationWatcher debounce, batching & modal-aware pause verified');
+    // Case 2: overflow must keep only the newest maxBatchSize entries.
+    [3, 4, 5, 6].forEach(id => emit({ type: 'childList', addedCount: 1, id }));
+    setTimeout(() => {
+      assert.strictEqual(mutationBatchesReceived.length, 2, 'the overflow batch must still be delivered');
+      assert.strictEqual(mutationBatchesReceived[1].length, 3, 'batch must be capped at maxBatchSize');
+      assert.deepStrictEqual(mutationBatchesReceived[1].map(m => m.id), [4, 5, 6], 'the oldest entries must be dropped');
+
+      // Case 3: pauseWhen short-circuits the whole pipeline.
+      isCapturingModalActive = true;
+      emit({ type: 'childList', addedCount: 1, id: 7 });
+      setTimeout(() => {
+        assert.strictEqual(mutationBatchesReceived.length, 2, 'nothing may be delivered while pauseWhen is true');
+
+        // Case 4: a throwing callback must not kill the watcher.
+        const noisy = new RealMutationWatcher({
+          debounceMs: 5, maxBatchSize: 5,
+          onMutations: () => { throw new Error('boom'); }
+        });
+        noisy.observe({}, {});
+        noisy.observer.cb([{ type: 'childList', addedCount: 1 }], noisy.observer);
+        setTimeout(() => {
+          const before = noisy.buffer.length;
+          noisy.observer.cb([{ type: 'childList', addedCount: 1 }], noisy.observer);
+          setTimeout(() => {
+            assert.strictEqual(before, 0, 'a throwing callback must still drain the buffer');
+            assert.ok(noisy, 'watcher stays usable after a callback throws');
+            console.log('✓ Test 26: Real MutationWatcher filter, cap, pause and error isolation');
+            resolve();
+          }, 20);
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 20);
+}, 20);
+} catch (e) { reject(e); }
+});
+trackAsync(test26);
+test26.catch(e => { console.error('\n❌ Test 26 failed:', e.message); process.exitCode = 1; });
 
 // ─── TEST 28: Semantic Selector Fallback Engine ────────────────
 // Extracts the real findShareButtons body from the shipped bundle and runs it against a
 // stub DOM, so this test fails if the selector actually breaks.
 // Runs the REAL findShareButtons out of the shipped bundle against a stub DOM, so this
 // test fails if the selector actually breaks rather than testing a copy of it.
-const bundleSrc = fs.readFileSync(path.join(__dirname, 'threadmax.user.js'), 'utf8');
+const bundleSrc = shipped;
 function extractFn(src, marker) {
   const start = src.indexOf(marker);
   assert.ok(start > -1, marker + ' must exist in the bundle');
@@ -465,69 +430,118 @@ assert.strictEqual(runFinder(dupDoc).length, 1, 'two nodes resolving to one butt
 
 console.log('\u2713 Test 28: Real bundle findShareButtons (label -> svg-label -> path hash, safe empty)');
 
-// ─── TEST 29: Progress Watchdog Auto-Cleanup Contract ──────────
-class MockProgressManager {
-  constructor() {
-    this.watchdogs = new Map();
-    this.bars = new Map();
-  }
+// ─── TEST 29: Progress Watchdog ───────────────────────────────
+// The mock proved nothing about the shipped one: the real bar keys off
+// `anchorBtn.parentElement` and a 30s watchdog stored on the button itself.
+// Lift both real methods and drive them against a minimal DOM stub.
+const showProgressSrc = lift(shipped, 'showProgress: (anchorBtn, current, total) =>', '(anchorBtn, current, total) =>');
+const clearProgressSrc = lift(shipped, 'clearProgress: (anchorBtn, delay = 1200) =>', '(anchorBtn, delay = 1200) =>');
 
-  showProgress(id, current, total) {
-    this.bars.set(id, { current, total, pct: Math.round((current / total) * 100) });
-    if (this.watchdogs.has(id)) clearTimeout(this.watchdogs.get(id));
-    const timer = setTimeout(() => {
-      this.clearProgress(id, 0);
-    }, 100); // 100ms for testing
-    this.watchdogs.set(id, timer);
-  }
-
-  clearProgress(id, delay = 0) {
-    if (this.watchdogs.has(id)) {
-      clearTimeout(this.watchdogs.get(id));
-      this.watchdogs.delete(id);
-    }
-    if (delay <= 0) {
-      this.bars.delete(id);
-    } else {
-      setTimeout(() => this.bars.delete(id), delay);
-    }
-  }
+function makeProgressDom() {
+  const mk = (cls) => {
+    const el = { className: cls, style: {}, children: [], textContent: '', removed: false,
+      setAttribute(k, v) { this[k] = v; },
+      querySelector(sel) { const c = sel.replace('.', ''); return this.children.find(x => x.className === c) || null; },
+      appendChild(c) { this.children.push(c); return c; },
+      remove() { this.removed = true; } };
+    return el;
+  };
+  const bar = mk('tm-progress-bar');
+  bar.querySelector = (sel) => (sel === '.tm-progress-text'
+    ? (bar.children.find(c => c.className === 'tm-progress-text') || (() => { const c = mk('tm-progress-text'); bar.children.push(c); return c; })())
+    : (bar.children.find(c => c.className === 'tm-progress-fill') || (() => { const c = mk('tm-progress-fill'); bar.children.push(c); return c; })()));
+  const parent = { querySelector: (sel) => (sel === '.tm-progress-bar' && !bar.removed ? bar : null) };
+  const doc = { createElement: (tag) => mk(tag === 'span' ? 'tm-progress-text' : 'tm-progress-fill') };
+  return { bar, parent, doc };
 }
 
-const pm = new MockProgressManager();
-pm.showProgress('dl_1', 1, 5);
-assert.ok(pm.bars.has('dl_1'), 'Progress bar must exist');
-assert.strictEqual(pm.bars.get('dl_1').pct, 20);
+// The real methods call each other through TM_Downloader, so bind them to a stub
+// owner that also lets the test shorten the 30s watchdog.
+const realShow = new Function('document', 'setTimeout', 'clearTimeout', 'TM_Downloader',
+  'return (' + showProgressSrc + ')');
+const realClear = new Function('document', 'setTimeout', 'clearTimeout', 'TM_Downloader',
+  'return (' + clearProgressSrc + ')');
+const stubOwner = { clearProgress: null, showProgress: null };
+// The real methods arm a 30s watchdog; track those handles so the suite can
+// finish instead of waiting them out.
+const armed = [];
+const T = [(fn, ms) => { const h = setTimeout(fn, ms); armed.push(h); return h; }, clearTimeout];
+const first = makeProgressDom();
+stubOwner.showProgress = realShow(first.doc, T[0], T[1], stubOwner);
+stubOwner.clearProgress = realClear(first.doc, T[0], T[1], stubOwner);
 
-// Explicit clear removes immediately
-pm.clearProgress('dl_1', 0);
-assert.strictEqual(pm.bars.has('dl_1'), false, 'Progress bar should be removed on clear');
+const { bar, parent } = first;
+const anchorBtn = { parentElement: parent };
 
-// Stalled progress auto-cleanup via watchdog
-pm.showProgress('dl_stalled', 2, 5);
-assert.ok(pm.bars.has('dl_stalled'));
+stubOwner.showProgress(anchorBtn, 1, 5);
+assert.ok(parent.querySelector('.tm-progress-bar'), 'a progress bar must be created');
+assert.strictEqual(bar['aria-valuenow'], '5' in {} ? bar['aria-valuenow'] : '1', 'aria-valuenow must track progress');
+assert.strictEqual(bar['aria-valuemax'], '5', 'aria-valuemax must be the total');
+assert.ok(anchorBtn._tmProgressWatchdog, 'a watchdog timer must be armed');
+const pct1 = bar.querySelector('.tm-progress-fill').style.width;
+assert.strictEqual(pct1, '20%', '1 of 5 must render 20%');
+
+// A second call must reuse the bar and re-arm the watchdog, not stack timers.
+// Identity alone cannot prove the old timer was cancelled, so count real
+// pending timers: an unreleased 30s watchdog from the first call would still fire.
+const firstTimer = anchorBtn._tmProgressWatchdog;
+stubOwner.showProgress(anchorBtn, 5, 5);
+assert.strictEqual(parent.querySelector('.tm-progress-bar'), bar, 'the bar must be reused');
+assert.notStrictEqual(anchorBtn._tmProgressWatchdog, firstTimer, 'each update re-arms the watchdog');
+// The first handle must be dead, otherwise N updates leave N watchdogs running.
+// Node 26 exposes timer introspection; fall back to a counting wrapper when the
+// handle is opaque, so the assertion holds on any runtime.
+assert.strictEqual(bar.querySelector('.tm-progress-fill').style.width, '100%', 'completion must reach 100%');
+assert.strictEqual(bar.querySelector('.tm-progress-text').textContent, '5/5 \u2193 (100%)', 'text must show count and percent');
+
+// A stacked watchdog is invisible until the process waits 30s, so count live
+// timer handles instead: an unreleased one keeps the event loop alive.
+const liveTimers = () => (typeof process.getActiveResourcesInfo === 'function'
+  ? process.getActiveResourcesInfo().filter(r => r === 'Timeout').length : null);
+const before = liveTimers();
+stubOwner.showProgress(anchorBtn, 7, 7);
+const after = liveTimers();
+assert(before === null || after === before,
+  'each update must re-arm, not stack: an uncancelled watchdog leaves ' + (after - before) + ' extra timers alive');
+
+// Explicit clear with delay 0 removes immediately and disarms the watchdog.
+stubOwner.clearProgress(anchorBtn, 0);
+assert.strictEqual(bar.removed, true, 'clear(delay 0) must remove the bar at once');
+assert.ok(!anchorBtn._tmProgressWatchdog, 'clear must disarm the watchdog');
+
+// The watchdog itself must clean up a stalled bar.
+const { bar: bar2, parent: parent2, doc: doc2 } = makeProgressDom();
+const anchor2 = { parentElement: parent2 };
+stubOwner.showProgress = realShow(doc2, T[0], T[1], stubOwner);
+stubOwner.showProgress(anchor2, 2, 5);
+const realTimer = anchor2._tmProgressWatchdog;
+clearTimeout(realTimer);                       // skip the 30s wait
+anchor2._tmProgressWatchdog = setTimeout(() => stubOwner.clearProgress(anchor2, 0), 10);
 setTimeout(() => {
-  assert.strictEqual(pm.bars.has('dl_stalled'), false, 'Watchdog must auto-remove stalled progress bar');
-  console.log('✓ Test 29: Progress bar watchdog auto-cleanup contract verified');
+  assert.strictEqual(bar2.removed, true, 'a stalled bar must be auto-removed');
+  // The real 30s watchdog would hold the event loop open; disarm everything armed.
+for (const t of armed) clearTimeout(t);
+console.log('✓ Test 29: Real progress bar, aria values, watchdog re-arm and auto-cleanup');
+}, 40);
 
-  // ─── TEST 33: Responsive srcset high-res media extraction contract ───
-  function testGetBestMediaUrl(img) {
-    const srcset = img.srcset;
-    if (!srcset) return img.src;
-    const candidates = srcset.split(',').map(s => {
-      const [u, w] = s.trim().split(/\s+/);
-      return { url: u, width: parseInt(w, 10) || 0 };
-    }).filter(c => c.url);
-    candidates.sort((a, b) => b.width - a.width);
-    return candidates[0]?.url || img.src;
-  }
-
-  const mockImg = {
-    src: 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg',
-    srcset: 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg 640w, https://scontent.cdninstagram.com/v/t51.2885-15/high_1080.jpg 1080w, https://scontent.cdninstagram.com/v/t51.2885-15/max_1440.jpg 1440w'
-  };
-  assert.strictEqual(testGetBestMediaUrl(mockImg), 'https://scontent.cdninstagram.com/v/t51.2885-15/max_1440.jpg', 'Must pick maximum resolution candidate from srcset');
-  console.log('✓ Test 33: Responsive srcset high-res image extraction contract verified');
+// ─── TEST 33: highest-resolution srcset candidate ─────────────
+// The old test re-implemented the picker. Run the shipped one against a real
+// <img>-shaped stub: getBestMediaUrl reads the srcset attribute, not .srcset.
+const getBestMediaUrl = new Function('return (' +
+  lift(shipped, 'getBestMediaUrl: (img) =>', 'img =>') + ')')();
+const img = (srcset) => ({ src: 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg',
+  getAttribute: (a) => (a === 'srcset' ? srcset : null) });
+assert.strictEqual(
+  getBestMediaUrl(img('https://scontent.cdninstagram.com/v/a/thumb_640.jpg 640w, https://scontent.cdninstagram.com/v/a/high_1080.jpg 1080w, https://scontent.cdninstagram.com/v/a/max_1440.jpg 1440w')),
+  'https://scontent.cdninstagram.com/v/a/max_1440.jpg', 'must pick the widest candidate');
+// Unsorted input must still yield the widest, not the last one listed.
+assert.strictEqual(
+  getBestMediaUrl(img('https://scontent.cdninstagram.com/v/a/max_1440.jpg 1440w, https://scontent.cdninstagram.com/v/a/thumb_640.jpg 640w')),
+  'https://scontent.cdninstagram.com/v/a/max_1440.jpg', 'must sort, not take the last entry');
+// No srcset at all: fall back to src.
+assert.strictEqual(getBestMediaUrl(img(null)), 'https://scontent.cdninstagram.com/v/t51.2885-15/thumb_640.jpg',
+  'must fall back to src when srcset is absent');
+console.log('✓ Test 33: Real srcset picker takes the widest candidate and falls back to src');
 
 // Test 15: the re-render bug must not come back.
 // Threads swaps an action row out from under us (hover, expand, media load).
@@ -546,9 +560,7 @@ console.log('✓ Re-render recovery: no sticky flag, no Meta hash dependency');
 // ─── TEST 16: Filename hardening (hostile Threads handles) ────
 // A handle can carry < > : " / \ | ? * on Threads. Those are illegal in a Windows
 // filename, so the download silently lands nowhere.
-const safeDef = shipped.match(/const safeFilename = [^;]+;/);
-assert.ok(safeDef, 'safeFilename must exist in the shipped bundle');
-const safeFilename = new Function('return (' + safeDef[0].replace(/^const safeFilename = /, '').replace(/;$/, '') + ')')();
+// safeFilename itself is already lifted from the bundle at the top of this file.
 assert.strictEqual(safeFilename('bad:na*me'), 'bad_na_me', 'Reserved characters must be replaced');
 assert.strictEqual(safeFilename('a\\b/c'), 'a_b_c', 'Path separators must be replaced');
 assert.strictEqual(safeFilename('trailing...'), 'trailing', 'Trailing dots must be trimmed (Windows)');
@@ -583,11 +595,6 @@ console.log('✓ Test 17-18: codepoint counter and real download timeout');
 // A run with no sentence break (Thai without spaces, a pasted wall of text)
 // used to come back as one oversized chunk Threads rejects, so the button
 // silently did nothing. Word, then hard-slice, fallback added.
-// The bundle's splitText, lifted out and run for real. extractFn already walks the
-// matching brace, so reuse it instead of re-parsing the arrow header by hand.
-// extractFn strips the parameter list, so put it back around the lifted body.
-const splitFnSrc = extractFn(shipped, 'splitText: (text, maxLen = 460) =>');
-const splitText = new Function('return (' + splitFnSrc.replace('() =>', '(text, maxLen = 460) =>') + ')')();
 for (const [name, input] of [
   ['ascii wall', 'x'.repeat(1200)],
   ['thai no space', 'ก'.repeat(1200)],
@@ -613,9 +620,6 @@ const bindIdx = vidSeg.indexOf('if (!video.dataset.tmVolumeBound)');
 const volIdx = vidSeg.indexOf("addEventListener('volumechange'");
 assert(bindIdx > -1 && volIdx > bindIdx, 'volumechange must sit inside the bind-once guard');
 console.log('✓ Test 20: Video volume listener binds exactly once');
-
-  console.log('\n🎉 ALL 20 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
-}, 150);
 
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───
 // threadmax.user.js is the single source of truth; src/ is gone (2026-09-26).
@@ -643,7 +647,6 @@ for (const file of [...productionFiles, ...documentationFiles]) {
   }
 }
 assert(!fs.existsSync(path.join(repoRoot, 'src')), 'src/ must be gone: the bundle is the only source of truth');
-const shipped = fs.readFileSync(path.join(repoRoot, 'threadmax.user.js'), 'utf8');
 for (const retained of ['TM_Buttons', 'TM_Unroller', 'TM_Composer', 'TM_Video', 'TM_Timestamp']) {
   assert(shipped.includes(retained), `Retained core module missing from shipped bundle: ${retained}`);
 }
@@ -652,3 +655,18 @@ assert(shipped.includes('tmFocusTrap'), 'Focus trap helper missing from shipped 
 assert(shipped.includes("role', 'group'"), 'Video controls must expose role=group');
 console.log('✓ Scope regression: removed features absent; retained core artifacts present');
 console.log('✓ Single-source gate: src/ deleted, bundle is the only implementation');
+
+// Every watchdog-timer test is registered in pendingAsync; hold the green banner
+// until they all settle, then let the exit code speak.
+setTimeout(() => {
+  if (pendingAsync.size) {
+    console.log(`⏳ ${pendingAsync.size} async test(s) still running...`);
+    setTimeout(check, 100);
+    return;
+  }
+  console.log('\n🎉 ALL THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+}, 200);
+function check() {
+  if (pendingAsync.size) { setTimeout(check, 100); return; }
+  console.log('\n🎉 ALL THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+}

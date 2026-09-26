@@ -959,6 +959,19 @@ assert.ok(/\.catch\([\s\S]*done\(false\)/.test(fetchAsBlobSeg),
   'a failed download must be reported through done(false)');
 console.log('✓ Test 35: a failed download reports instead of opening junk tabs');
 
+// ─── TEST 36: the avatar heuristic must not eat real post photos ──
+// /v/t51.29350-19/... is the normal CDN path of a post image. Filtering on a
+// '-19/' substring dropped real photos: 12 in the feed, 9 offered for download.
+const metaSeg = lift(shipped, 'getPostMetadata: (card) =>');
+assert.equal((metaSeg.match(/includes\('-19\/'\)/g) || []).length, 0,
+  'the -19/ path filter is back; it removes real post images');
+// The heuristics that DO identify an avatar must stay.
+for (const keep of ["img.width > 0 && img.width < 75", "classList.contains('avatar')", "borderRadius"])
+  assert.ok(metaSeg.includes(keep), 'avatar heuristic lost: ' + keep);
+// And the CDN allowlist, or nothing would be collected at all.
+assert.ok(metaSeg.includes("src.includes('cdninstagram.com')"), 'the CDN allowlist was dropped');
+console.log('✓ Test 36: a -19/ CDN path is a post image, not an avatar');
+
 
 
 

@@ -376,7 +376,11 @@
 
       card.querySelectorAll('img').forEach(img => {
         const src = TM_DOM.getBestMediaUrl(img);
-        if (!src || seen.has(src) || src.includes('-19/')) return;
+        // ponytail: no '-19/' path filter. That is not an avatar marker, it is the
+        // normal Instagram CDN path for a post image (/v/t51.29350-19/...), so the
+        // filter silently dropped real post photos. The size and shape checks below
+        // are what actually identify an avatar.
+        if (!src || seen.has(src)) return;
 
         // Skip avatar links
         const parentLink = img.closest('a');

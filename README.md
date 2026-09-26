@@ -18,14 +18,6 @@
 
 ---
 
-## 📸 Interface Preview
-
-<p align="center">
-  <img src="shot_clean.png" alt="ThreadMax Clean UI & Video Controller" width="100%">
-</p>
-
----
-
 ## ⚡ Core Pillars & Capabilities
 
 | Capability | Module | What It Does | Technical Advantage |

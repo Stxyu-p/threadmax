@@ -312,8 +312,14 @@
         const wrapper = btn?.parentElement;
         // The action row is the nearest ancestor holding more than one action
         // cell; two levels up lands on a single cell on the current DOM.
+        // ponytail: never climb past the post container. The "more than one button"
+        // test alone matched a wrapper spanning two posts, so both posts shared one
+        // action row: the second post never got its buttons, and a re-scan of the
+        // first post was written into the row the second post owned.
+        const postBound = btn?.closest?.('[data-pressable-container="true"], article') || null;
         let actionRow = wrapper?.parentElement;
         for (let cur = actionRow, up = 0; cur && cur !== document.body && up < 4; cur = cur.parentElement, up++) {
+          if (postBound && cur === postBound) break;
           if ((cur.querySelectorAll('[role="button"]').length || 0) > 1) { actionRow = cur; break; }
         }
         if (btn && wrapper && actionRow && !res.some(r => r.shareBtn === btn)) {
@@ -425,15 +431,20 @@
       // Check the live DOM, not a sticky flag: Threads re-renders an action row
       // (hover, expand, media swap) and wipes our buttons. A cached dataset
       // marker would leave that post permanently dead until reload.
-      // ponytail: the button check doubles as the idempotency guard.
-      if (actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')) return;
-
       const card = TM_DOM.findPostCard(actionRow);
       const postData = TM_DOM.getPostMetadata(card);
       const { author, postId, postUrl, media } = postData;
 
-      // 1. Download Button
-      if (media.length > 0) {
+      // 1. Download Button. A button whose count is stale gets replaced, not reused:
+      // a carousel that lazy-loads a slide kept the old title and the new photo was
+      // never downloadable (the DOM said 13, the button said 12).
+      // Never two download buttons in one row: a stale one from a previous media
+      // count, or a row shared by two posts, would stack a second button next to it.
+      const rowDl = actionRow.querySelector('.tm-download-btn');
+      const dlIsCurrent = rowDl && rowDl.dataset.tmCount === String(media.length);
+      if (rowDl && !dlIsCurrent) rowDl.remove();
+
+      if (media.length > 0 && !dlIsCurrent) {
         const dlWrapper = document.createElement('div');
         dlWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
         const dlBtn = document.createElement('div');
@@ -441,6 +452,7 @@
         dlBtn.setAttribute('role', 'button');
         dlBtn.setAttribute('tabindex', '0');
         dlBtn.title = media.length > 1 ? `ThreadMax: ดาวน์โหลดสื่อ (${media.length} ไฟล์)` : 'ThreadMax: ดาวน์โหลดสื่อ';
+        dlBtn.dataset.tmCount = String(media.length);
         dlBtn.innerHTML = `
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -462,30 +474,32 @@
       }
 
       // 2. Clean Link Button
-      const linkWrapper = document.createElement('div');
-      linkWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
-      const linkBtn = document.createElement('div');
-      linkBtn.className = 'tm-cleanlink-btn tm-btn';
-      linkBtn.setAttribute('role', 'button');
-      linkBtn.setAttribute('tabindex', '0');
-      linkBtn.title = 'ThreadMax: คัดลอกลิงก์สะอาด (ไร้ Tracking Code)';
-      linkBtn.innerHTML = `
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-        </svg>
-      `;
+      if (!actionRow.querySelector('.tm-cleanlink-btn')) {
+        const linkWrapper = document.createElement('div');
+        linkWrapper.className = `${shareWrapper.className || ''} tm-wrapper`.trim();
+        const linkBtn = document.createElement('div');
+        linkBtn.className = 'tm-cleanlink-btn tm-btn';
+        linkBtn.setAttribute('role', 'button');
+        linkBtn.setAttribute('tabindex', '0');
+        linkBtn.title = 'ThreadMax: คัดลอกลิงก์สะอาด (ไร้ Tracking Code)';
+        linkBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        `;
 
-      const onLinkAction = (e) => {
-        e.preventDefault(); e.stopPropagation();
-        copyText(cleanPostUrl(postUrl), '✓ คัดลอกลิงก์สะอาดแล้ว');
-      };
-      linkBtn.addEventListener('click', onLinkAction);
-      tmKeyActivate(linkBtn, onLinkAction);
+        const onLinkAction = (e) => {
+          e.preventDefault(); e.stopPropagation();
+          copyText(cleanPostUrl(postUrl), '✓ คัดลอกลิงก์สะอาดแล้ว');
+        };
+        linkBtn.addEventListener('click', onLinkAction);
+        tmKeyActivate(linkBtn, onLinkAction);
 
-      linkWrapper.appendChild(linkBtn);
-      const targetAnchor = actionRow.querySelector('.tm-download-btn')?.parentElement || shareWrapper;
-      actionRow.insertBefore(linkWrapper, targetAnchor.nextSibling);
+        linkWrapper.appendChild(linkBtn);
+        const targetAnchor = actionRow.querySelector('.tm-download-btn')?.parentElement || shareWrapper;
+        actionRow.insertBefore(linkWrapper, targetAnchor.nextSibling);
+      }
 
       // 3. Unroll Thread Button (When on post detail or OP thread)
       if (window.location.pathname.includes('/post/') && !actionRow.querySelector('.tm-unroll-btn')) {

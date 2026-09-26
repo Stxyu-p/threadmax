@@ -563,8 +563,13 @@ console.log('✓ Test 33: Real srcset picker takes the widest candidate and fall
 // the live DOM instead.
 assert(!/actionRow\.dataset\.tmInjected/.test(shipped),
   'Injection guard must not rely on a sticky dataset flag (re-render bug)');
-assert(shipped.includes("actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')"),
-  'Injection guard must check the live DOM for existing buttons');
+// The guard reads the live DOM, and it compares the recorded count rather than
+// mere presence: a carousel slide loaded after the button existed changed the
+// media list, and a presence-only guard hid the new photo permanently.
+assert(/const rowDl = actionRow\.querySelector\('\.tm-download-btn'\)/.test(shipped),
+  'Injection guard must check the live DOM for the existing download button');
+assert(/!actionRow\.querySelector\('\.tm-cleanlink-btn'\)\) \{/.test(shipped),
+  'Injection guard must check the live DOM for the existing cleanlink button');
 assert(!/x78zum5/.test(shipped),
   "Must not key off Meta's hashed action-row class; walk up from our own button");
 assert(/const dlWrapper = card\.querySelector\('\.tm-download-btn'\)\?\.parentElement/.test(shipped),
@@ -971,6 +976,32 @@ for (const keep of ["img.width > 0 && img.width < 75", "classList.contains('avat
 // And the CDN allowlist, or nothing would be collected at all.
 assert.ok(metaSeg.includes("src.includes('cdninstagram.com')"), 'the CDN allowlist was dropped');
 console.log('✓ Test 36: a -19/ CDN path is a post image, not an avatar');
+
+// ─── TEST 37: a lazy-loaded carousel slide must reach the button ──
+// The row guard skipped any post that already had a button. A carousel that loads
+// a slide afterwards changed the media list under that button, so the title kept
+// saying 12 while the DOM held 13 and the new photo was never downloadable.
+const injectSeg = lift(shipped, 'injectIntoActionRow: (shareInfo) =>');
+assert.ok(/dlBtn\.dataset\.tmCount = String\(media\.length\)/.test(injectSeg),
+  'the button must record the media count it was built for');
+// The reuse test has to compare that count, not merely test for presence.
+assert.ok(/dataset\.tmCount === String\(media\.length\)/.test(injectSeg),
+  'the row guard must compare the recorded count with the current one');
+// A stale button must be removed before a new one is added, or they stack.
+assert.ok(/rowDl && !dlIsCurrent\) rowDl\.remove\(\)/.test(injectSeg),
+  'a stale download button must be removed, not left beside the new one');
+// And the cleanlink guard must not run before the download widget is handled.
+// cleanlink does not depend on the media, so it guards itself. It lost that guard
+// once already, which is how a re-scan stacked a second copy of every button.
+assert.ok(/if \(!actionRow\.querySelector\('\.tm-cleanlink-btn'\)\) \{/.test(injectSeg),
+  'the cleanlink button must guard itself against duplication');
+// The order matters on the whole method: the download count is reconciled first,
+// so a stale button is replaced before the cleanlink guard can end the scan.
+const dlAt = shipped.indexOf("const dlIsCurrent");
+const cleanAt = shipped.indexOf("if (!actionRow.querySelector('.tm-cleanlink-btn')) {");
+assert.ok(dlAt > -1 && cleanAt > dlAt,
+  'the download widget must be reconciled before the cleanlink guard is reached');
+console.log('✓ Test 37: a lazy-loaded carousel slide reaches the button');
 
 
 

@@ -209,6 +209,9 @@
     } catch { return (url || '').split('?')[0]; }
   };
 
+  // Windows reserves < > : " / \ | ? * and control chars; a Threads handle can
+  // contain them, which would produce a filename the OS rejects silently.
+  const safeFilename = s => String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[.\s]+$/g, '').slice(0, 80) || 'file';
   const escapeHtml = str => String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[c]);
 
   const parseMetricNumber = str => !str ? 0 : (s => (parseFloat(s) || 0) * ({ k: 1e3, m: 1e6 }[s.slice(-1)] || 1))(String(str).trim().toLowerCase());
@@ -233,9 +236,19 @@
     findShareButtons: () => {
       const res = [];
       const collect = (icon) => {
-        const svg = icon.closest('svg') || (icon.tagName?.toLowerCase() === 'svg' ? icon : null);
+        // The icon may be the button itself, or the svg nested inside it.
+        // ponytail: closest() only walks ancestors, so a button that WRAPS its
+        // svg never matched. Upgrade: no need, both directions are covered.
+        const svg = icon.closest?.('svg') || (icon.tagName?.toLowerCase() === 'svg' ? icon : null)
+          || icon.querySelector?.('svg') || null;
         const btn = svg?.closest('[role="button"]') || svg?.parentElement;
-        const wrapper = btn?.parentElement, actionRow = wrapper?.parentElement;
+        const wrapper = btn?.parentElement;
+        // The action row is the nearest ancestor holding more than one action
+        // cell; two levels up lands on a single cell on the current DOM.
+        let actionRow = wrapper?.parentElement;
+        for (let cur = actionRow, up = 0; cur && cur !== document.body && up < 4; cur = cur.parentElement, up++) {
+          if ((cur.querySelectorAll('[role="button"]').length || 0) > 1) { actionRow = cur; break; }
+        }
         if (btn && wrapper && actionRow && !res.some(r => r.shareBtn === btn)) {
           res.push({ shareSvg: svg, shareBtn: btn, shareWrapper: wrapper, actionRow });
         }
@@ -497,7 +510,7 @@
   const TM_Downloader = {
     downloadSingle: (item, author, postId, index, anchorBtn) => {
       const ext = item.type === 'video' ? 'mp4' : 'jpg';
-      const filename = `${author}_${postId}_${String(index).padStart(3, '0')}.${ext}`;
+      const filename = `${safeFilename(author)}_${safeFilename(postId)}_${String(index).padStart(3, '0')}.${ext}`;
       TM_Downloader.showProgress(anchorBtn, 1, 1);
 
       if (item.type === 'video') {
@@ -540,14 +553,14 @@
           const resp = await fetch(item.url);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const buf = await resp.arrayBuffer();
-          zipFiles.push({ name: `${author}_${postId}_${String(i + 1).padStart(3, '0')}.${ext}`, data: new Uint8Array(buf) });
+          zipFiles.push({ name: `${safeFilename(author)}_${safeFilename(postId)}_${String(i + 1).padStart(3, '0')}.${ext}`, data: new Uint8Array(buf) });
           completed++;
         } catch { failed++; }
         TM_Downloader.showProgress(anchorBtn, completed + failed, total);
       }
 
       if (zipFiles.length > 0) {
-        downloadBlob(createStoredZip(zipFiles), `${author}_${postId}_carousel_${zipFiles.length}items.zip`);
+        downloadBlob(createStoredZip(zipFiles), `${safeFilename(author)}_${safeFilename(postId)}_carousel_${zipFiles.length}items.zip`);
         showToast(failed === 0 ? `✓ ดาวน์โหลด ZIP สำเร็จ (${zipFiles.length} ไฟล์)` : `✓ โหลดได้ ${completed} ไฟล์ (${failed} ล้มเหลว)`);
       } else showToast('⚠️ ไม่สามารถดาวน์โหลดไฟล์ในโพสต์นี้ได้');
 

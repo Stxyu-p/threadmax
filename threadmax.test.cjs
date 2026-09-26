@@ -403,15 +403,25 @@ function extractFn(src, marker) {
 const runFinder = new Function('document',
   `return (${extractFn(bundleSrc, 'findShareButtons: () =>')})(document);`);
 
-// DOM stub: div(cell) > div[role=button] > svg > path, the shape the real action row has.
+// DOM stub matching the real Threads row: .actions(row) > .actcell > [role=button] > svg > path.
+// The seed is what the selector matched on layer 1, i.e. the BUTTON itself, not the path.
+// That distinction matters: closest('svg') only walks ancestors, so a button that wraps
+// its own svg was invisible to the old stub and to the old code.
 function iconNode() {
-  const path = { tagName: 'PATH', parentElement: null, closest: (s) => (s === 'svg' ? svg : null) };
-  const svg = { tagName: 'SVG', parentElement: null, closest: (s) => (s === 'svg' ? svg : null) };
-  const btn = { tagName: 'DIV', role: 'button', parentElement: null, closest: (s) => (s === '[role="button"]' ? btn : null) };
-  const cell = { tagName: 'DIV', role: null, parentElement: null };
-  const row = { tagName: 'DIV', role: null, parentElement: null };
-  path.parentElement = svg; svg.parentElement = btn; btn.parentElement = cell; cell.parentElement = row;
-  return path;
+  const path = { tagName: 'PATH', parentElement: null, closest: (s) => (s === 'svg' ? svg : null), querySelector: () => null };
+  const svg = { tagName: 'SVG', parentElement: null, closest: (s) => (s === 'svg' ? svg : null), querySelector: () => null };
+  // The share button WRAPS its svg; it is not inside one. closest() must not find it.
+  const btn = { tagName: 'DIV', role: 'button', parentElement: null, closest: (s) => (s === '[role="button"]' ? btn : null), querySelector: (s) => (s === 'svg' ? svg : null) };
+  // Only the row holds more than one role=button; the single cell must NOT qualify,
+  // otherwise the walk-up is untested and a two-level guess would pass.
+  // Real Threads nests an <a> between the button and its cell, so the row is three
+  // levels up. Without it a two-level guess lands on the row by accident and the
+  // walk-up is never exercised.
+  const link = { tagName: 'A', role: null, parentElement: null, querySelectorAll: () => [] };
+  const cell = { tagName: 'DIV', role: null, className: 'actcell', parentElement: null, querySelectorAll: () => [] };
+  const row = { tagName: 'DIV', role: null, className: 'actions', parentElement: null, querySelectorAll: () => [btn, { tagName: 'DIV' }, { tagName: 'DIV' }] };
+  path.parentElement = svg; svg.parentElement = btn; btn.parentElement = link; link.parentElement = cell; cell.parentElement = row;
+  return { seed: btn, path, row, cell, link, btn, svg };
 }
 const doc = (map) => ({ querySelectorAll: (sel) => map[sel] || [] });
 const HASH = 'path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]';
@@ -419,27 +429,39 @@ const BTN_LABEL = '[role="button"][aria-label*="Share" i], [role="button"][aria-
 const SVG_LABEL = 'svg[title*="Share" i], svg[title*="\u0e41\u0e0a\u0e23\u0e4c"], svg[aria-label*="Share" i], svg[aria-label*="\u0e41\u0e0a\u0e23\u0e4c"]';
 
 // 1. Primary layer: labelled share button, icon geometry irrelevant.
-const byLabel = runFinder(doc({ [BTN_LABEL]: [iconNode()] }));
+const n1 = iconNode();
+const byLabel = runFinder(doc({ [BTN_LABEL]: [n1.seed] }));
 assert.strictEqual(byLabel.length, 1, 'labelled share button must be found regardless of icon path');
-assert.strictEqual(byLabel[0].actionRow.tagName, 'DIV', 'actionRow is the button grandparent');
+assert.strictEqual(byLabel[0].actionRow, n1.row, 'actionRow must be the multi-action row, not a single cell');
 
 // 2. Second layer: label on the svg, button itself unlabelled.
-const bySvgLabel = runFinder(doc({ [SVG_LABEL]: [iconNode()] }));
+const n2 = iconNode();
+const bySvgLabel = runFinder(doc({ [SVG_LABEL]: [n2.svg] }));
 assert.strictEqual(bySvgLabel.length, 1, 'svg-level Share label must resolve');
 
 // 3. Last layer: no label anywhere, only the legacy icon path.
-const byHash = runFinder(doc({ [HASH]: [iconNode()] }));
+const n3 = iconNode();
+const byHash = runFinder(doc({ [HASH]: [n3.path] }));
 assert.strictEqual(byHash.length, 1, 'path hash must remain as the final fallback');
+// The path layer seeds the walk from the path, so the row must still resolve the same way.
+assert.strictEqual(byHash[0].actionRow, n3.row, 'path layer must resolve the same multi-action row');
 
 // 4. Layers short-circuit: a semantic hit means the hash query is never issued.
 let hashQueried = false;
-const spyDoc = { querySelectorAll: (sel) => { if (sel === HASH) hashQueried = true; return sel === BTN_LABEL ? [iconNode()] : []; } };
+const n4 = iconNode();
+const spyDoc = { querySelectorAll: (sel) => { if (sel === HASH) hashQueried = true; return sel === BTN_LABEL ? [n4.seed] : []; } };
 const spied = runFinder(spyDoc);
 assert.strictEqual(spied.length, 1);
 assert.strictEqual(hashQueried, false, 'hash layer must not run once a semantic match exists');
 
 // 5. Unrecognised DOM: zero results, never a throw.
 assert.strictEqual(runFinder(doc({})).length, 0, 'unknown DOM must yield zero results');
+
+// 6. Two different elements that resolve to the SAME button (a wrapper and the svg
+// inside it) must collapse to one entry, otherwise that post gets two button sets.
+const dup = iconNode();
+const dupDoc = { querySelectorAll: (sel) => (sel === SVG_LABEL ? [dup.seed, dup.svg] : []) };
+assert.strictEqual(runFinder(dupDoc).length, 1, 'two nodes resolving to one button must collapse to one');
 
 console.log('\u2713 Test 28: Real bundle findShareButtons (label -> svg-label -> path hash, safe empty)');
 
@@ -521,7 +543,25 @@ assert(/const dlWrapper = card\.querySelector\('\.tm-download-btn'\)\?\.parentEl
   'Select bar must locate the action row by walking up from the injected button');
 console.log('✓ Re-render recovery: no sticky flag, no Meta hash dependency');
 
-  console.log('\n🎉 ALL 15 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// ─── TEST 16: Filename hardening (hostile Threads handles) ────
+// A handle can carry < > : " / \ | ? * on Threads. Those are illegal in a Windows
+// filename, so the download silently lands nowhere.
+const safeDef = shipped.match(/const safeFilename = [^;]+;/);
+assert.ok(safeDef, 'safeFilename must exist in the shipped bundle');
+const safeFilename = new Function('return (' + safeDef[0].replace(/^const safeFilename = /, '').replace(/;$/, '') + ')')();
+assert.strictEqual(safeFilename('bad:na*me'), 'bad_na_me', 'Reserved characters must be replaced');
+assert.strictEqual(safeFilename('a\\b/c'), 'a_b_c', 'Path separators must be replaced');
+assert.strictEqual(safeFilename('trailing...'), 'trailing', 'Trailing dots must be trimmed (Windows)');
+assert.strictEqual(safeFilename(''), 'file', 'Empty input must fall back');
+assert.ok(!/[<>:"/\\|?*]/.test(safeFilename('x'.repeat(200))), 'Long input must stay legal');
+// every download path must go through it
+for (const marker of ['downloadSingle:', 'downloadBatch:']) {
+  const seg = shipped.slice(shipped.indexOf(marker), shipped.indexOf(marker) + 2500);
+  assert(seg.includes('safeFilename('), marker + ' must build filenames through safeFilename');
+}
+console.log('✓ Test 16: Hostile handles produce legal filenames');
+
+  console.log('\n🎉 ALL 16 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───

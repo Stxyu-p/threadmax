@@ -894,6 +894,27 @@ const rawFetches = [...shipped.matchAll(/(?<![.\w])fetch\((?!url, \{ signal)/g)]
 assert.equal(rawFetches.length, 0, 'fetch() called without a deadline:\n' + rawFetches.join('\n'));
 console.log('✓ Test 18: every fetch is bounded by a deadline');
 
+// ─── TEST 20: srcset parsing survives a comma in the query string ──
+// split(',') on a srcset broke a CDN URL like a.jpg?w=100,h=200 and a URL
+// containing a space was cut mid-path, so the download saved a 404.
+const bestSrc = lift(shipped, 'getBestMediaUrl: (img) => {', 'getBestMediaUrl: (img) => {').replace(/\n\s*\/\/ Layered so a Meta redesign$/, '');
+const getBest = new Function('return (' + bestSrc.trim().replace('getBestMediaUrl: (img) =>', 'img =>') + ')')();
+const srcOf = (srcset) => getBest({ getAttribute: () => srcset, src: 'FALLBACK' });
+assert.equal(srcOf('https://cdn.x/a.jpg 320w, https://cdn.x/b.jpg 1080w, https://cdn.x/c.jpg 640w'),
+  'https://cdn.x/b.jpg', 'the widest candidate must win');
+assert.equal(srcOf('https://cdn.x/a.jpg 1x, https://cdn.x/b.jpg 2x'), 'https://cdn.x/b.jpg', 'density must be read');
+assert.equal(srcOf('https://cdn.x/a.jpg 1080w, https://cdn.x/b.jpg 2x'), 'https://cdn.x/a.jpg',
+  'w and x are not comparable, so a width candidate must win');
+assert.equal(srcOf('https://cdn.x/a.jpg?w=100,h=200 320w, https://cdn.x/b.jpg?w=1000,h=2000 1080w'),
+  'https://cdn.x/b.jpg?w=1000,h=2000', 'a comma inside the query must not split the entry');
+assert.equal(srcOf('https://cdn.x/a.jpg 320w,'), 'https://cdn.x/a.jpg', 'a trailing comma must be ignored');
+assert.equal(srcOf('https://cdn.x/a.jpg'), 'https://cdn.x/a.jpg', 'a descriptor-less srcset must still be used');
+assert.equal(srcOf('   ,  ,'), 'FALLBACK', 'junk must fall back to img.src, never return a broken URL');
+assert.equal(srcOf(''), 'FALLBACK', 'no srcset must fall back to img.src');
+assert.equal(srcOf(null), 'FALLBACK', 'a missing srcset must fall back to img.src');
+console.log('✓ Test 20: srcset parsing survives commas, spaces and junk');
+
+
 
 
 

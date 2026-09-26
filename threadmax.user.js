@@ -269,12 +269,21 @@
     getBestMediaUrl: (img) => {
       const srcset = img.getAttribute('srcset');
       if (!srcset) return img.src;
-      const candidates = srcset.split(',').map(s => {
-        const [u, w] = s.trim().split(/\s+/);
-        return { url: u, width: parseInt(w, 10) || 0 };
-      }).filter(c => c.url);
-      candidates.sort((a, b) => b.width - a.width);
-      return candidates[0]?.url || img.src;
+      // A CDN query can hold a comma (a.jpg?w=100,h=200) and a URL can hold a
+      // space, so neither ',' nor whitespace delimits an entry. The descriptor
+      // at the END of an entry is the only unambiguous anchor.
+      const re = /(?:^|,\s*)(\S+(?:[^\s,]*\S)?)\s+(\d+(?:\.\d+)?)([wx])(?=\s*(?:,|$))/g;
+      const cands = [...srcset.matchAll(re)].map(m => ({ url: m[1], n: parseFloat(m[2]), w: m[3] === 'w' }));
+      // No descriptor anywhere: a lone URL is still a valid srcset, and img.src
+      // may be the low-res placeholder the browser picked before layout.
+      if (cands.length === 0) {
+        const only = srcset.trim().match(/^(\S+)$/);
+        return only ? only[1] : img.src;
+      }
+      // w and x are not comparable, so prefer the w set when present:
+      // 2x of a 500w image is the same file at 1000w, which is the point.
+      const byW = cands.filter(c => c.w);
+      return (byW.length ? byW : cands).reduce((a, b) => (b.n > a.n ? b : a)).url;
     },
 
     // Layered so a Meta redesign degrades one step instead of killing every feature.

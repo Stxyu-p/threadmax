@@ -507,7 +507,21 @@ setTimeout(() => {
   assert.strictEqual(testGetBestMediaUrl(mockImg), 'https://scontent.cdninstagram.com/v/t51.2885-15/max_1440.jpg', 'Must pick maximum resolution candidate from srcset');
   console.log('✓ Test 33: Responsive srcset high-res image extraction contract verified');
 
-  console.log('\n🎉 ALL 14 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
+// Test 15: the re-render bug must not come back.
+// Threads swaps an action row out from under us (hover, expand, media load).
+// A sticky dataset flag left that post dead until reload; the guard must read
+// the live DOM instead.
+assert(!/actionRow\.dataset\.tmInjected/.test(shipped),
+  'Injection guard must not rely on a sticky dataset flag (re-render bug)');
+assert(shipped.includes("actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')"),
+  'Injection guard must check the live DOM for existing buttons');
+assert(!/x78zum5/.test(shipped),
+  "Must not key off Meta's hashed action-row class; walk up from our own button");
+assert(/const dlWrapper = card\.querySelector\('\.tm-download-btn'\)\?\.parentElement/.test(shipped),
+  'Select bar must locate the action row by walking up from the injected button');
+console.log('✓ Re-render recovery: no sticky flag, no Meta hash dependency');
+
+  console.log('\n🎉 ALL 15 THREADMAX v1.4.0 TESTS PASSED GREEN!\n');
 }, 150);
 
 // ─── SCOPE REGRESSION: removed features must not survive in production or docs ───

@@ -338,8 +338,11 @@
   const TM_Buttons = {
     injectIntoActionRow: (shareInfo) => {
       const { shareBtn, shareWrapper, actionRow } = shareInfo;
-      if (actionRow.dataset.tmInjected || actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')) return;
-      actionRow.dataset.tmInjected = '1';
+      // Check the live DOM, not a sticky flag: Threads re-renders an action row
+      // (hover, expand, media swap) and wipes our buttons. A cached dataset
+      // marker would leave that post permanently dead until reload.
+      // ponytail: the button check doubles as the idempotency guard.
+      if (actionRow.querySelector('.tm-download-btn, .tm-cleanlink-btn')) return;
 
       const card = TM_DOM.findPostCard(actionRow);
       const postData = TM_DOM.getPostMetadata(card);
@@ -611,7 +614,10 @@
         tile.appendChild(pill);
       });
 
-      const actionRow = card.querySelector('.tm-download-btn')?.closest('.x78zum5') || card.querySelector('.tm-download-btn')?.parentElement?.parentElement;
+      // Walk up from our own button instead of guessing Meta's hashed class: the
+      // wrapper we injected sits in the row, so the row is its parentElement.
+      const dlWrapper = card.querySelector('.tm-download-btn')?.parentElement;
+      const actionRow = dlWrapper?.parentElement || null;
       let bar = card.querySelector('.tm-select-bar');
       if (!bar) {
         bar = document.createElement('div');

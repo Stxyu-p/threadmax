@@ -384,42 +384,52 @@ assert.strictEqual(mutationBatchesReceived.length, 2, 'Should not process mutati
 console.log('✓ Test 26: MutationWatcher debounce, batching & modal-aware pause verified');
 
 // ─── TEST 28: Semantic Selector Fallback Engine ────────────────
-function testSemanticShareDetection(mockDOM) {
-  // Strategy 1: Find within action row group
-  if (mockDOM.actionGroups) {
-    for (const group of mockDOM.actionGroups) {
-      if (group.buttons && group.buttons.length >= 3) {
-        const shareCandidate = group.buttons.find(b => b.hasShareSvg || b.title === 'Share' || b.ariaLabel === 'Share');
-        if (shareCandidate) return { found: true, method: 'group_semantic', button: shareCandidate };
-      }
-    }
+// Extracts the real findShareButtons body from the shipped bundle and runs it against a
+// stub DOM, so this test fails if the selector actually breaks.
+// Runs the REAL findShareButtons out of the shipped bundle against a stub DOM, so this
+// test fails if the selector actually breaks rather than testing a copy of it.
+const bundleSrc = fs.readFileSync(path.join(__dirname, 'threadmax.user.js'), 'utf8');
+function extractFn(src, marker) {
+  const start = src.indexOf(marker);
+  assert.ok(start > -1, marker + ' must exist in the bundle');
+  const arrow = src.indexOf('{', src.indexOf('=>', start));
+  let depth = 0, end = arrow;
+  for (let i = arrow; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
   }
-  // Strategy 2: Fallback to SVG path matching
-  if (mockDOM.svgPaths) {
-    const matched = mockDOM.svgPaths.some(p => p.includes('M7.247 1.499') || p.includes('M7.246 1.5'));
-    if (matched) return { found: true, method: 'svg_path_fallback', button: { id: 'fallback_btn' } };
-  }
-  return { found: false, method: 'none', button: null };
+  return src.slice(start, end + 1).replace(marker, '() =>');
 }
+const runFinder = new Function('document',
+  `return (${extractFn(bundleSrc, 'findShareButtons: () =>')})(document);`);
 
-// 1. Primary semantic group detection
-const resPrimary = testSemanticShareDetection({
-  actionGroups: [
-    { buttons: [{ id: 'like' }, { id: 'reply' }, { id: 'repost' }, { id: 'share', ariaLabel: 'Share' }] }
-  ]
-});
-assert.strictEqual(resPrimary.found, true);
-assert.strictEqual(resPrimary.method, 'group_semantic');
-assert.strictEqual(resPrimary.button.id, 'share');
+// DOM stub: div(cell) > div[role=button] > svg > path, the shape the real action row has.
+function iconNode() {
+  const path = { tagName: 'PATH', parentElement: null, closest: (s) => (s === 'svg' ? svg : null) };
+  const svg = { tagName: 'SVG', parentElement: null, closest: (s) => (s === 'svg' ? svg : null) };
+  const btn = { tagName: 'DIV', role: 'button', parentElement: null, closest: (s) => (s === '[role="button"]' ? btn : null) };
+  const cell = { tagName: 'DIV', role: null, parentElement: null };
+  const row = { tagName: 'DIV', role: null, parentElement: null };
+  path.parentElement = svg; svg.parentElement = btn; btn.parentElement = cell; cell.parentElement = row;
+  return path;
+}
+const doc = (map) => ({ querySelectorAll: (sel) => map[sel] || [] });
+const HASH = 'path[d*="M7.247 1.499"], path[d*="M7.246 1.5"], path[d*="M1.53 6.014"]';
 
-// 2. Fallback to SVG path when groups aren't rendered
-const resFallback = testSemanticShareDetection({
-  svgPaths: ['M7.247 1.499 C 5.2 2.1...']
-});
-assert.strictEqual(resFallback.found, true);
-assert.strictEqual(resFallback.method, 'svg_path_fallback');
+// 1. Primary: path hash present.
+const byHash = runFinder(doc({ [HASH]: [iconNode()] }));
+assert.strictEqual(byHash.length, 1, 'path hash must locate one action row');
+assert.strictEqual(byHash[0].actionRow.tagName, 'DIV', 'actionRow is the button grandparent');
 
-console.log('✓ Test 28: Semantic selector detection & SVG fallback engine verified');
+// 2. Meta ships a new icon path: the semantic fallback must still resolve.
+const LABEL = 'svg[title*="Share" i], svg[title*="\u0e41\u0e0a\u0e23\u0e4c"], svg[aria-label*="Share" i], svg[aria-label*="\u0e41\u0e0a\u0e23\u0e4c"]';
+const byLabel = runFinder(doc({ [LABEL]: [iconNode()] }));
+assert.strictEqual(byLabel.length, 1, 'aria-label Share fallback must survive an icon change');
+
+// 3. Unrecognised DOM: zero results, never a throw.
+assert.strictEqual(runFinder(doc({})).length, 0, 'unknown DOM must yield zero results');
+
+console.log('\u2713 Test 28: Real bundle findShareButtons (hash primary, label fallback, safe empty)');
 
 // ─── TEST 29: Progress Watchdog Auto-Cleanup Contract ──────────
 class MockProgressManager {

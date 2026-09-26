@@ -1056,6 +1056,20 @@ const cssComments = styles.match(/^\s*\/\/[^\n]*$/gm) || [];
 assert.equal(cssComments.length, 0, 'the stylesheet has a // comment that kills the next rule: ' + (cssComments[0] || '').trim());
 console.log('✓ Test 40: a split chunk keeps its paragraph breaks and wraps long runs');
 
+// ─── TEST 41: a timestamp pass must not re-arm the scanner that called it ──
+// updateAll wrote innerText on every time element on every scan, and the scanner
+// watches for mutations: 16 rewrites in 8s on a page that had not changed, forever.
+// lift() walks arrow-function braces, not an object literal, so slice this one out.
+const tsStart = shipped.indexOf('const TM_Timestamp = {');
+const tsSeg = shipped.slice(tsStart, shipped.indexOf('/* ─── 10.', tsStart)).replace(/\r\n/g, '\n');
+assert.ok(/if \(timeEl\.innerText !== next\) timeEl\.innerText = next;/.test(tsSeg),
+  'the timestamp must only write when the text actually changes');
+// The comparison has to sit on the write, not somewhere harmless: an unconditional
+// assign next to it would still loop even if this line exists.
+const tsWrites = (tsSeg.match(/timeEl\.innerText = /g) || []).length;
+assert.equal(tsWrites, 1, 'there is exactly one timestamp write site, guarded: ' + tsWrites);
+console.log('✓ Test 41: an unchanged timestamp is not rewritten');
+
 
 
 

@@ -868,7 +868,7 @@ getPostMetadata: (card) => {
   };
 
   /* ─── 9. SMART CONFIGURABLE TIMESTAMP ────────────────────── */
-  const TM_Timestamp = {
+    const TM_Timestamp = {
     updateAll: () => {
       const mode = TM_Config.get(CONFIG_KEYS.TIMESTAMP_MODE, 'hybrid');
       document.querySelectorAll('time[datetime]').forEach(timeEl => {
@@ -878,9 +878,16 @@ getPostMetadata: (card) => {
         const d = new Date(iso);
         if (isNaN(d.getTime())) return;
 
-        if (mode === 'native') timeEl.innerText = timeEl.dataset.tmOrig;
-        else if (mode === 'absolute') timeEl.innerText = TM_Timestamp.formatAbsolute(d);
-        else if (mode === 'hybrid') timeEl.innerText = TM_Timestamp.formatHybrid(timeEl.dataset.tmOrig, d);
+        let next;
+        if (mode === 'native') next = timeEl.dataset.tmOrig;
+        else if (mode === 'absolute') next = TM_Timestamp.formatAbsolute(d);
+        else next = TM_Timestamp.formatHybrid(timeEl.dataset.tmOrig, d);
+
+        // Assigning innerText is a DOM mutation, and the scanner watches for
+        // mutations, so writing the same string on every pass re-armed the timer
+        // forever: 12 rewrites in 6s on a page that had not changed at all. Only
+        // write when the text actually differs, which ends the loop.
+        if (timeEl.innerText !== next) timeEl.innerText = next;
       });
     },
 

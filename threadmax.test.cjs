@@ -1003,6 +1003,23 @@ assert.ok(dlAt > -1 && cleanAt > dlAt,
   'the download widget must be reconciled before the cleanlink guard is reached');
 console.log('✓ Test 37: a lazy-loaded carousel slide reaches the button');
 
+// ─── TEST 38: the dropdown must be dismissible from the keyboard ──
+// A keyboard user opened the menu with Enter and then had no way out: Escape did
+// nothing and the focus never entered the menu, so the only exit was a page click.
+const ddSeg = lift(shipped, 'showCarouselDropdown: (anchorWrapper, anchorBtn, postData) =>');
+assert.ok(/e\.key === 'Escape'/.test(ddSeg), 'the dropdown must answer Escape');
+assert.ok(/document\.addEventListener\('keydown', onKey, true\)/.test(ddSeg),
+  'the Escape handler must be registered while the menu is open');
+assert.ok(/document\.removeEventListener\('keydown', onKey, true\)/.test(ddSeg),
+  'the Escape handler must be removed on cleanup, or it leaks one per open');
+assert.ok(/anchorBtn\.focus\(\)/.test(ddSeg), 'closing must return focus to the button');
+// Focus has to land inside the menu, otherwise Tab walks the page behind it.
+assert.ok(/itemAll\.focus\(\)/.test(ddSeg), 'opening must move focus into the menu');
+// The deferred registration must not fire for a menu already closed.
+assert.ok(/if \(!dropdown\.isConnected\) return;/.test(ddSeg),
+  'the deferred listener registration must skip a menu that was closed');
+console.log('✓ Test 38: the dropdown closes on Escape and returns focus');
+
 
 
 

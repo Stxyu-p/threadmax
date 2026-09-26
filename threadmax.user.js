@@ -576,17 +576,25 @@
 
       const onDocClick = evt => { if (!dropdown.contains(evt.target) && !anchorBtn.contains(evt.target)) closeDropdown(); };
       const onScrollOrResize = () => closeDropdown();
+      // ponytail: one keydown listener instead of a focus trap. A keyboard user who
+      // opened the menu with Enter had no way out: Escape did nothing, so the only
+      // exit was a mouse click somewhere else on the page.
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); closeDropdown(); anchorBtn.focus(); } };
 
       dropdown._cleanup = () => {
         document.removeEventListener('click', onDocClick, true);
         window.removeEventListener('scroll', onScrollOrResize, { capture: true });
         window.removeEventListener('resize', onScrollOrResize);
+        document.removeEventListener('keydown', onKey, true);
       };
 
       setTimeout(() => {
+        if (!dropdown.isConnected) return;      // closed inside the 50ms window
         document.addEventListener('click', onDocClick, true);
+        document.addEventListener('keydown', onKey, true);
         window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true });
         window.addEventListener('resize', onScrollOrResize);
+        itemAll.focus();
       }, 50);
     }
   };

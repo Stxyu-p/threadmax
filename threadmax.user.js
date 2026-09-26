@@ -260,6 +260,15 @@
   // contain them, which would produce a filename the OS rejects silently.
   const safeFilename = s => String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[.\s]+$/g, '').slice(0, 80) || 'file';
   const escapeHtml = str => String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[c]);
+  // Every image was saved as .jpg whatever it really was, so a PNG or a GIF landed
+  // in the ZIP under the wrong name. Take the extension from the path, not a
+  // guess: the query string is dropped first because ?w=100,h=200 has commas.
+  const mediaExtension = (item) => {
+    if (item.type === 'video') return 'mp4';
+    const m = String(item.url || '').split('?')[0].match(/\.([a-z0-9]{2,5})$/i);
+    const ext = m && m[1].toLowerCase();
+    return ext && /^(jpe?g|png|webp|gif|avif|heic|heif|bmp)$/.test(ext) ? ext : 'jpg';
+  };
 
   const parseMetricNumber = str => !str ? 0 : (s => (parseFloat(s) || 0) * ({ k: 1e3, m: 1e6 }[s.slice(-1)] || 1))(String(str).trim().toLowerCase());
 
@@ -565,7 +574,7 @@
   /* ─── 6. BATCH DOWNLOADER & PROGRESS ──────────────────────── */
   const TM_Downloader = {
     downloadSingle: (item, author, postId, index, anchorBtn) => {
-      const ext = item.type === 'video' ? 'mp4' : 'jpg';
+      const ext = mediaExtension(item);
       const filename = `${safeFilename(author)}_${safeFilename(postId)}_${String(index).padStart(3, '0')}.${ext}`;
       TM_Downloader.showProgress(anchorBtn, 1, 1);
 
@@ -588,7 +597,7 @@
       if (mode === 'individual') {
         for (let i = 0; i < mediaList.length; i++) {
           const item = mediaList[i];
-          const ext = item.type === 'video' ? 'mp4' : 'jpg';
+          const ext = mediaExtension(item);
           const ok = await downloadDirect(item.url, `${safeFilename(author)}_${safeFilename(postId)}_${String(i + 1).padStart(3, '0')}.${ext}`);
           if (ok) completed++; else failed++;
           TM_Downloader.showProgress(anchorBtn, i + 1, total);
@@ -604,7 +613,7 @@
       const zipFiles = [];
       for (let i = 0; i < mediaList.length; i++) {
         const item = mediaList[i];
-        const ext = item.type === 'video' ? 'mp4' : 'jpg';
+        const ext = mediaExtension(item);
         try {
           // A bare fetch has no deadline: one stalled CDN response left the loop
           // pending forever, the bar wedged at n-1/total, and the watchdog then

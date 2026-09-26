@@ -61,10 +61,18 @@ const cutArrow = (src, from) => {
   const i = src.indexOf(from);
   assert.ok(i > -1, from + ' must exist in the bundle');
   const seg = src.slice(i, i + 2000).replace(/\r\n/g, '\n');
-  // Multi-line bodies end with `\n  };`; one-liners end with `;` on the same line.
-  const multi = seg.indexOf('\n  };');
-  const end = multi > -1 ? multi + 4 : seg.indexOf(';') + 1;
-  assert.ok(end > 0, from + ' has no terminator');
+  // The body starts after the FIRST `=>` on the declaration and ends at the first
+  // newline at nesting depth 0. Looking for `{` was wrong: a one-liner body has
+  // none, so the walk ran into the NEXT statement's braces and swallowed it.
+  const arrow = seg.indexOf('=>');
+  assert.ok(arrow > -1, from + ' is not an arrow function');
+  let depth = 0, end = seg.length;
+  for (let k = arrow + 2; k < seg.length; k++) {
+    const c = seg[k];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === '\n' && depth <= 0) { end = k; break; }
+  }
   return seg.slice(0, end)
     .replace(from, '')
     .replace(/;\s*$/, '')
@@ -913,6 +921,30 @@ assert.equal(srcOf('   ,  ,'), 'FALLBACK', 'junk must fall back to img.src, neve
 assert.equal(srcOf(''), 'FALLBACK', 'no srcset must fall back to img.src');
 assert.equal(srcOf(null), 'FALLBACK', 'a missing srcset must fall back to img.src');
 console.log('✓ Test 20: srcset parsing survives commas, spaces and junk');
+
+// ─── TEST 34: the saved suffix must come from the URL, not a hardcoded jpg ──
+// A PNG saved as .jpg is not just mislabelled: the browser sniffs the bytes and
+// some viewers refuse the file. The path holds the extension, the query does not.
+const mediaExtension = new Function('return (' + cutArrow(shipped, 'const mediaExtension =') + ')')();
+const REALISTIC = [
+  [{ type: 'image', url: 'https://scontent.cdninstagram.com/v/t51.29350-15/aaa.webp?stp=dst-jpg&_nc=1' }, 'webp'],
+  [{ type: 'image', url: 'https://scontent.cdninstagram.com/v/t51/pic.png?stp=dst-png' }, 'png'],
+  [{ type: 'image', url: 'https://scontent.cdninstagram.com/v/t51/anim.GIF?_nc=cat' }, 'gif'],
+  [{ type: 'video', url: 'https://scontent.cdninstagram.com/v/t51/clip.mp4' }, 'mp4'],
+  [{ type: 'image', url: 'https://scontent.cdninstagram.com/v/t51/photo' }, 'jpg'],
+  [{ type: 'image', url: 'https://scontent.cdninstagram.com/v/t51/weird.exe?a=1' }, 'jpg'],
+  [{ type: 'image', url: '' }, 'jpg'],
+];
+for (const [item, want] of REALISTIC) {
+  assert.equal(mediaExtension(item), want, 'wrong suffix for ' + (item.url || '(empty)'));
+}
+console.log('✓ Test 34: the saved suffix follows the real media type');
+// A correct helper nobody calls is still the old bug, so the call sites are part
+// of the contract: the hardcoded ternary must not survive anywhere.
+const hardcoded = [...shipped.matchAll(/item\.type === 'video' \? 'mp4' : 'jpg'/g)];
+assert.equal(hardcoded.length, 0, 'the hardcoded jpg suffix is back at offset ' + (hardcoded[0] ? hardcoded[0].index : 0));
+assert.equal((shipped.match(/= mediaExtension\(item\);/g) || []).length, 3,
+  'every download path must build the name through mediaExtension');
 
 
 

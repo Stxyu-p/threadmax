@@ -542,7 +542,7 @@
         for (let i = 0; i < mediaList.length; i++) {
           const item = mediaList[i];
           const ext = item.type === 'video' ? 'mp4' : 'jpg';
-          const ok = await downloadDirect(item.url, `${author}_${postId}_${String(i + 1).padStart(3, '0')}.${ext}`);
+          const ok = await downloadDirect(item.url, `${safeFilename(author)}_${safeFilename(postId)}_${String(i + 1).padStart(3, '0')}.${ext}`);
           if (ok) completed++; else failed++;
           TM_Downloader.showProgress(anchorBtn, i + 1, total);
           await new Promise(r => setTimeout(r, 220));

@@ -566,11 +566,28 @@ assert.strictEqual(safeFilename('a\\b/c'), 'a_b_c', 'Path separators must be rep
 assert.strictEqual(safeFilename('trailing...'), 'trailing', 'Trailing dots must be trimmed (Windows)');
 assert.strictEqual(safeFilename(''), 'file', 'Empty input must fall back');
 assert.ok(!/[<>:"/\\|?*]/.test(safeFilename('x'.repeat(200))), 'Long input must stay legal');
-// every download path must go through it
-for (const marker of ['downloadSingle:', 'downloadBatch:']) {
-  const seg = shipped.slice(shipped.indexOf(marker), shipped.indexOf(marker) + 2500);
-  assert(seg.includes('safeFilename('), marker + ' must build filenames through safeFilename');
+// Every filename the downloader builds must go through safeFilename. Scanning a
+// fixed byte window missed the individual-file path, which sat further down
+// downloadBatch; scan the whole function body instead.
+const dlStart = shipped.indexOf('downloadBatch: async (');
+const dlEnd = shipped.indexOf('showProgress: (anchorBtn, current, total) =>', dlStart);
+assert(dlStart > -1 && dlEnd > dlStart, 'downloadBatch body must be locatable');
+const dlBody = shipped.slice(dlStart, dlEnd);
+// A filename template is one that interpolates the author or postId. Toast text
+// and error strings never do, so they are not filename builders.
+for (const tpl of dlBody.match(/`[^`]*\$\{[^`]*`/g) || []) {
+  if (!/\$\{(author|postId|safeFilename\()/.test(tpl)) continue;
+  const parts = [...tpl.matchAll(/\$\{((?:[^}]|\}[^`])*)\}/g)].map(m => m[1]);
+  for (const part of parts) {
+    if (/^(ext|zipFiles\.length|String\(|i \+ 1)/.test(part)) continue;  // numbers and extensions
+    assert(part.startsWith('safeFilename('),
+      `filename part \${${part}} is not sanitised: ${tpl}`);
+  }
 }
+// downloadSingle builds one too, and it is a different function
+const singleBody = shipped.slice(shipped.indexOf('downloadSingle:'), shipped.indexOf('downloadBatch:'));
+assert(singleBody.includes('safeFilename(author)') && singleBody.includes('safeFilename(postId)'),
+  'downloadSingle must sanitise both author and postId');
 console.log('✓ Test 16: Hostile handles produce legal filenames');
 
 // ─── TEST 17: composer counts codepoints, not UTF-16 units ────

@@ -1035,6 +1035,27 @@ assert.ok(/cur && cur !== document\.body/.test(cardSeg),
   'the climb must be bounded by document.body');
 console.log('✓ Test 39: each post on a feed resolves to its own card');
 
+// ─── TEST 40: a split chunk must keep the paragraph breaks it was given ──
+// The reader turns newlines into <br>; the splitter stores them as text. Without
+// white-space the blank lines between paragraphs collapsed and every chunk read as
+// one run-on block. The rule also has to survive CSS parsing: a // comment in a
+// stylesheet is not a comment, it eats the next rule.
+// lift() has an 8000-char window and the stylesheet sits past it, so read the sheet
+// straight out of the bundle instead of lifting a function out of it.
+const styleStart = shipped.indexOf("style.textContent = `");
+const styleEnd = shipped.indexOf('`;', styleStart);
+const styles = shipped.slice(styleStart, styleEnd);
+const splitRule = /\.tm-split-text \{[^}]*white-space:\s*pre-wrap/.test(styles);
+assert.ok(splitRule, 'a split chunk must render its line breaks (white-space: pre-wrap)');
+// An unbreakable run (a long URL) has to wrap instead of pushing the card wider.
+assert.ok(/\.tm-split-text \{[^}]*overflow-wrap:\s*anywhere/.test(styles),
+  'a long unbreakable run must wrap inside the chunk');
+// // is a JavaScript comment, not CSS. Inside a stylesheet the parser drops that line
+// AND the rule that follows it, so the fix silently never applied.
+const cssComments = styles.match(/^\s*\/\/[^\n]*$/gm) || [];
+assert.equal(cssComments.length, 0, 'the stylesheet has a // comment that kills the next rule: ' + (cssComments[0] || '').trim());
+console.log('✓ Test 40: a split chunk keeps its paragraph breaks and wraps long runs');
+
 
 
 

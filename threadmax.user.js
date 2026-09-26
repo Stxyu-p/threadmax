@@ -1184,6 +1184,10 @@ getPostMetadata: (card) => {
       .tm-reader-segment, .tm-split-item { padding: 14px !important; background: #1a1a1a !important; border: 1px solid #282828 !important; border-radius: 8px !important; }
       .tm-segment-badge { font-size: 11px !important; font-weight: 700 !important; color: var(--tm-accent) !important; }
       .tm-segment-text, .tm-split-text { font-size: 14px !important; line-height: 1.6 !important; color: #e4e6eb !important; }
+      /* The reader turns newlines into <br>; the splitter keeps them as text, so
+         without this the blank lines between paragraphs collapse and every chunk
+         reads as one run-on block. pre-wrap keeps the breaks and still wraps. */
+      .tm-split-text { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
       .tm-segment-media-hint { margin-top: 8px !important; font-size: 11px !important; color: #777 !important; }
       .tm-split-item-header { display: flex !important; align-items: center !important; justify-content: space-between !important; margin-bottom: 8px !important; }
       .tm-composer-bar { display: flex !important; align-items: center !important; justify-content: space-between !important; padding: 6px 12px !important; font-size: 11px !important; color: #888 !important; border-top: 1px solid #242424 !important; }

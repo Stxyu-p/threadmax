@@ -8,6 +8,7 @@
 *Engineered for [threads.net](https://www.threads.net/) & [threads.com](https://www.threads.com/)*
 
 [![Version: v1.4.0](https://img.shields.io/badge/Version-v1.4.0-10b981?style=flat-square)](https://github.com/Stxyu-p/threadmax)
+[![Changelog](https://img.shields.io/badge/Changelog-View_Notes-blueviolet?style=flat-square)](CHANGELOG.md)
 [![Platform: Threads Web](https://img.shields.io/badge/Platform-threads.net-black?style=flat-square&logo=threads&logoColor=white)](https://www.threads.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](LICENSE)
 
@@ -117,6 +118,12 @@ The suite has no dependencies. It covers the ZIP32 byte layout, URL sanitization
 | **Long thread reading** | Scroll through feed noise | ✅ **Unrolled reader modal with 1-click Markdown export** |
 | **Composer length** | Guess where the cutoff hides content | ✅ **Hairline marker plus auto splitter with sentence preservation** |
 | **Dependencies / privacy** | Bundled libraries or server side handling | ✅ **Zero dependencies, 100% client side** |
+
+---
+
+## 📜 Release History & Changelog
+
+All version release notes and historical changes are documented in [CHANGELOG.md](CHANGELOG.md) per Keep a Changelog standards.
 
 ---
 

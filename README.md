@@ -34,16 +34,16 @@
 
 ---
 
-## 🔬 Under the Hood: Engineering Invariants
+## 🔬 Engineering Invariants
 
-### 1. Meta Virtualized DOM & Stacking Context Breakout
+### Virtualized DOM & Stacking Portal
 
 Threads Web aggressively recycles DOM nodes and traps popups within constrained `overflow: hidden` bounding boxes. ThreadMax implements an **Out-of-Flow Stacking Portal**:
 - Action dropdowns and modals escape parent CSS stacking contexts (`z-index: 9999`).
 - Viewport bounds checking prevents clipping at the edges of the screen.
 - Active listeners auto-dismiss on scroll or external pointer clicks.
 
-### 2. Pure Client-Side ZIP32 Engine
+### Client-Side In-Memory ZIP32 Engine
 
 Traditional browser downloaders rely on bulky multi-megabyte dependencies like JSZip. ThreadMax incorporates an ultra-lightweight ZIP32 packager:
 - **Pre-computed 256-entry CRC32 table** generates checksums with bitwise speed.
@@ -52,15 +52,11 @@ Traditional browser downloaders rely on bulky multi-megabyte dependencies like J
 
 ---
 
-## 🚀 Installation & Setup
+## 🚀 Direct Installation
 
-1. Install a userscript manager in your browser:
-   - [Tampermonkey](https://www.tampermonkey.net/) (Recommended)
-   - [Violentmonkey](https://violentmonkey.github.io/)
-2. Install **ThreadMax**:
-   - Install directly via GitHub Raw:  
-     👉 **[Install threadmax.user.js](https://raw.githubusercontent.com/Stxyu-p/threadmax/main/threadmax.user.js)**
-3. Navigate to [threads.net](https://www.threads.net/) or [threads.com](https://www.threads.com/) - the ⬇ download trigger appears inline on every post with media.
+| Target | Source | Runtime Requirement |
+| :--- | :--- | :--- |
+| **Userscript RAW** | [Install threadmax.user.js](https://raw.githubusercontent.com/Stxyu-p/threadmax/main/threadmax.user.js) | Tampermonkey / Violentmonkey on Chromium or Firefox |
 
 ---
 
@@ -94,11 +90,11 @@ The injected controls are keyboard-first, not mouse-only:
 
 Run syntax check and local tests:
 
-```powershell
-# 1. Lexical and syntax validation
+```bash
+# Syntax validation against shipped bundle
 node --check threadmax.user.js
 
-# 2. Automated test suite
+# Full invariant test suite (43 checks)
 node threadmax.test.cjs
 ```
 

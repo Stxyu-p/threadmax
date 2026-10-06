@@ -107,6 +107,19 @@ The suite has no dependencies. It covers the ZIP32 byte layout, URL sanitization
 
 ---
 
+## 📊 Feature Comparison
+
+| Capability | Browser default / generic downloader extensions | ⚡ **ThreadMax** |
+| :--- | :--- | :--- |
+| **Media download** | Right click one file at a time, carousel needs repeats | ✅ **In-feed trigger with auto media detection plus in-memory ZIP for carousels** |
+| **Video control** | Fixed speed, no PiP, volume resets | ✅ **Floating controller: 1.0x to 2.0x cycle, PiP, volume memory** |
+| **Link copy** | Tracking parameters stay in the URL | ✅ **1-click sanitized canonical URL** |
+| **Long thread reading** | Scroll through feed noise | ✅ **Unrolled reader modal with 1-click Markdown export** |
+| **Composer length** | Guess where the cutoff hides content | ✅ **Hairline marker plus auto splitter with sentence preservation** |
+| **Dependencies / privacy** | Bundled libraries or server side handling | ✅ **Zero dependencies, 100% client side** |
+
+---
+
 ## 📄 License
 
 Distributed under the [MIT License](LICENSE).  
